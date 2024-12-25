@@ -78,7 +78,7 @@ impl Default for CartpoleEnv {
 }
 
 #[pymodule]
-fn rl_template_rust(_py: Python, m: &PyModule) -> PyResult<()> {
+fn sentence_ranker_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CartpoleEnv>()?;
     Ok(())
 }

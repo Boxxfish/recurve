@@ -1,10 +1,10 @@
 [tool.poetry]
-name = "rl-template"
+name = "sentence-ranker"
 version = "0.1.0"
 description = ""
 authors = ["Ben Giacalone <bensgiacalone@gmail.com>"]
 readme = "README.md"
-packages = [{include = "rl_template"}]
+packages = [{include = "sentence_ranker"}]
 
 [tool.poetry.dependencies]
 python = "^3.9"

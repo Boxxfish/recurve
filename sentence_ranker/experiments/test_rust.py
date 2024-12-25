@@ -1,25 +1,23 @@
 """
-Experiment for checking that PPO works.
-
-Proximal Policy Optimization (PPO) is a popular online deep reinforcement
-learning algorithm. At OpenAI and a lot of other places, it's used as a
-baseline, since you can get pretty good performance without having to fiddle
-with the hyperparameters too much.
+Experiment for checking that Rust env works.
+This should be removed if the Rust environment changes.
 """
 from functools import reduce
-from typing import Any
+from typing import Any, Dict, Tuple
 
-import envpool  # type: ignore
+import gymnasium
 import torch
 import torch.nn as nn
 import wandb
-from gymnasium.envs.classic_control.cartpole import CartPoleEnv
+from gymnasium.spaces import Box, Discrete
+from gymnasium.vector import SyncVectorEnv
 from torch.distributions import Categorical
 from tqdm import tqdm
 
-from rl_template.algorithms.ppo import train_ppo
-from rl_template.algorithms.rollout_buffer import RolloutBuffer
-from rl_template.utils import init_orthogonal
+from sentence_ranker.algorithms.ppo import train_ppo
+from sentence_ranker.algorithms.rollout_buffer import RolloutBuffer
+from sentence_ranker.utils import init_orthogonal
+from sentence_ranker_rust import CartpoleEnv  # type: ignore
 
 _: Any
 
@@ -41,7 +39,7 @@ device = torch.device("cuda")  # Device to use during training.
 wandb.init(
     project="tests",
     config={
-        "experiment": "ppo",
+        "experiment": "rust",
         "num_envs": num_envs,
         "train_steps": train_steps,
         "train_iters": train_iters,
@@ -100,28 +98,49 @@ class PolicyNet(nn.Module):
         return x
 
 
-env = envpool.make("CartPole-v1", "gym", num_envs=num_envs)
-test_env = CartPoleEnv()
+# Wraps the Rust env in a Python class.
+class PyCartpoleEnv(gymnasium.Env):
+    def __init__(self):
+        self.observation_space = Box(-1.0, 1.0, (4,))
+        self.action_space = Discrete(2)
+        self.env = CartpoleEnv()
+
+    def step(self, action: int):
+        obs, reward, terminated = self.env.step(action)
+        return (obs, reward, terminated, False, {})
+
+    def reset(self):
+        obs = self.env.reset()
+        return (obs, {})
+
+
+env = SyncVectorEnv([lambda: PyCartpoleEnv() for _ in range(num_envs)])
+test_env = PyCartpoleEnv()
 
 # Initialize policy and value networks
-obs_space = env.observation_space
-act_space = env.action_space
-v_net = ValueNet(obs_space.shape)
-p_net = PolicyNet(obs_space.shape, act_space.n)
+obs_space = env.envs[0].observation_space
+obs_size = torch.Size(obs_space.shape or [])
+act_space = env.envs[0].action_space
+if not isinstance(act_space, Discrete):
+    print("Wrong action type.")
+    quit()
+v_net = ValueNet(obs_size)
+p_net = PolicyNet(obs_size, int(act_space.n))
 v_opt = torch.optim.Adam(v_net.parameters(), lr=v_lr)
 p_opt = torch.optim.Adam(p_net.parameters(), lr=p_lr)
 
 # A rollout buffer stores experience collected during a sampling run
 buffer = RolloutBuffer(
-    obs_space.shape,
+    obs_size,
     torch.Size((1,)),
-    torch.Size((act_space.n,)),
+    torch.Size((int(act_space.n),)),
     torch.int,
     num_envs,
     train_steps,
 )
 
 obs = torch.Tensor(env.reset()[0])
+done = False
 for _ in tqdm(range(iterations), position=0):
     # Collect experience for a number of steps and store it in the buffer
     with torch.no_grad():
@@ -133,11 +152,14 @@ for _ in tqdm(range(iterations), position=0):
                 obs,
                 torch.from_numpy(actions).unsqueeze(-1),
                 action_probs,
-                rewards,
-                dones,
-                truncs,
+                list(rewards),
+                list(dones),
+                list(truncs),
             )
             obs = torch.from_numpy(obs_)
+            if done:
+                obs = torch.Tensor(env.reset()[0])
+                done = False
         buffer.insert_final_step(obs)
 
     # Train
@@ -161,7 +183,7 @@ for _ in tqdm(range(iterations), position=0):
     eval_done = False
     with torch.no_grad():
         # Visualize
-        reward_total = 0
+        reward_total = 0.0
         entropy_total = 0.0
         eval_obs = torch.Tensor(test_env.reset()[0])
         for _ in range(eval_steps):
@@ -173,11 +195,11 @@ for _ in tqdm(range(iterations), position=0):
                 obs_, reward, eval_done, _, _ = test_env.step(action)
                 eval_obs = torch.Tensor(obs_)
                 steps_taken += 1
-                reward_total += reward
-                avg_entropy += distr.entropy()
                 if eval_done:
                     eval_obs = torch.Tensor(test_env.reset()[0])
                     break
+                reward_total += reward
+                avg_entropy += distr.entropy()
             avg_entropy /= steps_taken
             entropy_total += avg_entropy
 

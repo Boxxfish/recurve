@@ -1,10 +1,9 @@
 """
-Experiment for checking that DQN works.
+Experiment for checking that C51 works.
 
-The Deep Q Network (DQN) algorithm is a popular offline deep reinforcement
-learning algorithm. It's intuitive to understand, and it gets reliable results,
-though it can take longer to run.
+C51 is a distributional RL algorithm that predicts the distribution of returns instead of the expectation.
 """
+
 import copy
 import random
 from functools import reduce
@@ -18,9 +17,10 @@ import wandb
 from gymnasium.envs.classic_control.cartpole import CartPoleEnv
 from tqdm import tqdm
 
-from rl_template.algorithms.dqn import train_dqn
-from rl_template.algorithms.replay_buffer import ReplayBuffer
-from rl_template.utils import init_orthogonal
+from sentence_ranker.algorithms.c51 import distrs_to_means
+from sentence_ranker.algorithms.c51 import train_c51
+from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
+from sentence_ranker.utils import init_orthogonal
 
 _: Any
 INF = 10**8
@@ -31,20 +31,24 @@ train_steps = 4  # Number of steps to step through during sampling. Total # of s
 iterations = 100000  # Number of sample/train iterations.
 train_iters = 1  # Number of passes over the samples collected.
 train_batch_size = 512  # Minibatch size while training models.
-discount = 0.999  # Discount factor applied to rewards.
-q_epsilon = 0.1  # Epsilon for epsilon greedy strategy. This gets annealed over time.
+discount = 0.9  # Discount factor applied to rewards.
+q_epsilon = 0.9  # Epsilon for epsilon greedy strategy. This gets annealed over time.
 eval_steps = 8  # Number of eval runs to average over.
 max_eval_steps = 300  # Max number of steps to take during each eval run.
+eval_every = 100  # Frequency of eval runs.
 q_lr = 0.0001  # Learning rate of the q net.
 warmup_steps = 500  # For the first n number of steps, we will only sample randomly.
 buffer_size = 10000  # Number of elements that can be stored in the buffer.
 target_update = 500  # Number of iterations before updating Q target.
-device = torch.device("cuda")
+num_supports = 51  # Number of supports that make up the return distribution.
+v_min = 0  # Low end of return distribution.
+v_max = 40  # High end of return distribution.
+device = torch.device("cpu")
 
 wandb.init(
     project="tests",
     config={
-        "experiment": "dqn",
+        "experiment": "c51",
         "num_envs": num_envs,
         "train_steps": train_steps,
         "train_iters": train_iters,
@@ -57,13 +61,13 @@ wandb.init(
 )
 
 
-# The Q network takes in an observation and returns the predicted return for
-# each action.
+# The Q network takes in an observation and returns the distribution of predicted returns for each action.
 class QNet(nn.Module):
     def __init__(
         self,
         obs_shape: torch.Size,
         action_count: int,
+        num_supports: int,
     ):
         nn.Module.__init__(self)
         flat_obs_dim = reduce(lambda e1, e2: e1 * e2, obs_shape, 1)
@@ -72,20 +76,17 @@ class QNet(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
+            nn.Linear(64, action_count * num_supports),
         )
-        self.relu = nn.ReLU()
-        self.advantage = nn.Sequential(
-            nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, action_count)
-        )
-        self.value = nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 1))
+        self.num_supports = num_supports
         self.action_count = action_count
         init_orthogonal(self)
 
     def forward(self, input: torch.Tensor):
         x = self.net(input)
-        advantage = self.advantage(x)
-        value = self.value(x)
-        return value + advantage - advantage.mean(1, keepdim=True)
+        return torch.softmax(
+            x.reshape(x.shape[0], self.action_count, self.num_supports), -1
+        )
 
 
 env = envpool.make("CartPole-v1", "gym", num_envs=num_envs)
@@ -94,7 +95,7 @@ test_env = CartPoleEnv()
 # Initialize Q network
 obs_space = env.observation_space
 act_space = env.action_space
-q_net = QNet(obs_space.shape, int(act_space.n))
+q_net = QNet(obs_space.shape, int(act_space.n), num_supports)
 q_net_target = copy.deepcopy(q_net)
 q_net_target.to(device)
 q_opt = torch.optim.Adam(q_net.parameters(), lr=q_lr)
@@ -124,7 +125,7 @@ for step in tqdm(range(iterations), position=0):
                 actions_ = np.array(actions_list)
             else:
                 q_vals = q_net(obs)
-                actions_ = q_vals.argmax(1).numpy()
+                actions_ = distrs_to_means(q_vals, v_min, v_max).argmax(1).numpy()
             obs_, rewards, dones, truncs, _ = env.step(actions_)
             next_obs = torch.from_numpy(obs_)
             buffer.insert_step(
@@ -140,7 +141,7 @@ for step in tqdm(range(iterations), position=0):
 
     # Train
     if buffer.filled:
-        total_q_loss = train_dqn(
+        total_q_loss = train_c51(
             q_net,
             q_net_target,
             q_opt,
@@ -149,41 +150,47 @@ for step in tqdm(range(iterations), position=0):
             train_iters,
             train_batch_size,
             discount,
+            v_min,
+            v_max,
+            num_supports,
         )
+
+        log_dict = {
+            "avg_q_loss": total_q_loss / train_iters,
+            "q_lr": q_opt.param_groups[-1]["lr"],
+        }
 
         # Evaluate the network's performance after this training iteration.
-        eval_done = False
-        with torch.no_grad():
-            reward_total = 0
-            pred_reward_total = 0
-            obs_, info = test_env.reset()
-            eval_obs = torch.from_numpy(np.array(obs_)).float()
-            for _ in range(eval_steps):
-                steps_taken = 0
-                score = 0
-                for _ in range(max_eval_steps):
-                    q_vals = q_net(eval_obs.unsqueeze(0)).squeeze()
-                    action = q_vals.argmax(0).item()
-                    pred_reward_total += (
-                        q_net(eval_obs.unsqueeze(0)).squeeze().max(0).values.item()
-                    )
-                    obs_, reward, eval_done, eval_trunc, _ = test_env.step(action)
-                    eval_obs = torch.from_numpy(np.array(obs_)).float()
-                    steps_taken += 1
-                    reward_total += reward
-                    if eval_done or eval_trunc:
-                        obs_, info = test_env.reset()
+        if step % eval_every == 0:
+            with torch.no_grad():
+                reward_total = 0
+                obs_, info = test_env.reset()
+                eval_obs = torch.from_numpy(np.array(obs_)).float()
+                for _ in range(eval_steps):
+                    steps_taken = 0
+                    for _ in range(max_eval_steps):
+                        q_distrs = q_net(eval_obs.unsqueeze(0))
+                        action = (
+                            distrs_to_means(q_distrs, v_min, v_max)
+                            .squeeze(0)
+                            .argmax(0)
+                            .item()
+                        )
+                        obs_, reward, eval_done, eval_trunc, _ = test_env.step(action)
                         eval_obs = torch.from_numpy(np.array(obs_)).float()
-                        break
+                        steps_taken += 1
+                        reward_total += reward
+                        if eval_done or eval_trunc:
+                            obs_, info = test_env.reset()
+                            eval_obs = torch.from_numpy(np.array(obs_)).float()
+                            break
+            log_dict.update(
+                {
+                    "avg_eval_episode_reward": reward_total / eval_steps,
+                }
+            )
 
-        wandb.log(
-            {
-                "avg_eval_episode_reward": reward_total / eval_steps,
-                "avg_eval_episode_predicted_reward": pred_reward_total / eval_steps,
-                "avg_q_loss": total_q_loss / train_iters,
-                "q_lr": q_opt.param_groups[-1]["lr"],
-            }
-        )
+        wandb.log(log_dict)
 
         # Update Q target
         if (step + 1) % target_update == 0:
