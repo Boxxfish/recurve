@@ -22,7 +22,6 @@ def train_ppo(
     lambda_: float,
     epsilon: float,
     gradient_steps: int = 1,
-    use_masks: bool = False,
     entropy_coeff: float = 0.0,
 ) -> Tuple[float, float]:
     """
@@ -51,10 +50,11 @@ def train_ppo(
         batches = buffer.samples(train_batch_size, discount, lambda_, v_net_frozen)
         for (
             i,
-            (prev_states, actions, action_probs, returns, advantages, action_masks),
+            (prev_input_ids, prev_attn_masks, actions, action_probs, returns, advantages, action_masks),
         ) in enumerate(batches):
             # Move batch to device if applicable
-            prev_states = prev_states.to(device=device)
+            prev_input_ids = prev_input_ids.to(device=device)
+            prev_attn_masks = prev_attn_masks.to(device=device)
             actions = actions.to(device=device)
             action_probs = action_probs.to(device=device)
             returns = returns.to(device=device)
@@ -66,10 +66,7 @@ def train_ppo(
                 old_act_probs = Categorical(logits=action_probs).log_prob(
                     actions.squeeze()
                 )
-            if use_masks:
-                new_log_probs = p_net(prev_states, action_masks)
-            else:
-                new_log_probs = p_net(prev_states)
+            new_log_probs = p_net(prev_input_ids, prev_attn_masks)
             new_act_distr = Categorical(logits=new_log_probs)
             new_act_probs = new_act_distr.log_prob(actions.squeeze())
             term1 = (new_act_probs - old_act_probs).exp() * advantages.squeeze()
@@ -82,7 +79,7 @@ def train_ppo(
             total_p_loss += p_loss.item()
 
             # Train value network
-            diff = v_net(prev_states) - returns
+            diff = v_net(prev_input_ids, prev_attn_masks) - returns
             v_loss = (diff * diff).mean() / gradient_steps
             v_loss.backward()
             total_v_loss += v_loss.item()

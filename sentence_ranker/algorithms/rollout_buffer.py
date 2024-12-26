@@ -2,6 +2,7 @@
 A rollout buffer for use with on-policy algorithms. Unlike a replay buffer,
 rollouts only store experience collected under a single policy.
 """
+
 from typing import List, Optional, Tuple
 
 import torch
@@ -16,26 +17,24 @@ class RolloutBuffer:
 
     def __init__(
         self,
-        state_shape: torch.Size,
-        action_shape: torch.Size,
-        action_probs_shape: torch.Size,
-        action_dtype: torch.dtype,
+        max_input_len: int,
+        vocab_size: int,
         num_envs: int,
         num_steps: int,
     ):
         k = torch.float
-        state_shape = torch.Size([num_steps + 1, num_envs] + list(state_shape))
-        action_shape = torch.Size([num_steps, num_envs] + list(action_shape))
-        action_probs_shape = torch.Size(
-            [num_steps, num_envs] + list(action_probs_shape)
-        )
+        input_ids_shape = torch.Size([num_steps + 1, num_envs, max_input_len])
+        attn_mask_shape = torch.Size([num_steps + 1, num_envs, max_input_len])
+        action_shape = torch.Size([num_steps, num_envs, 1])
+        action_probs_shape = torch.Size([num_steps, num_envs, vocab_size])
         self.num_envs = num_envs
         self.num_steps = num_steps
         self.next = 0
         d = torch.device("cpu")
-        self.states = torch.zeros(state_shape, dtype=k, device=d, requires_grad=False)
+        self.input_ids = torch.zeros(input_ids_shape, dtype=torch.int, device=d, requires_grad=False)
+        self.attn_masks = torch.zeros(attn_mask_shape, dtype=torch.bool, device=d, requires_grad=False)
         self.actions = torch.zeros(
-            action_shape, dtype=action_dtype, device=d, requires_grad=False
+            action_shape, dtype=torch.int, device=d, requires_grad=False
         )
         self.action_probs = torch.zeros(
             action_probs_shape, dtype=k, device=d, requires_grad=False
@@ -56,7 +55,8 @@ class RolloutBuffer:
 
     def insert_step(
         self,
-        states: torch.Tensor,
+        input_ids: torch.Tensor,
+        attn_masks: torch.Tensor,
         actions: torch.Tensor,
         action_probs: torch.Tensor,
         rewards: List[float],
@@ -72,7 +72,8 @@ class RolloutBuffer:
         """
         d = torch.device("cpu")
         with torch.no_grad():
-            self.states[self.next].copy_(states)
+            self.input_ids[self.next].copy_(input_ids)
+            self.attn_masks[self.next].copy_(attn_masks)
             self.actions[self.next].copy_(actions)
             self.action_probs[self.next].copy_(action_probs)
             self.rewards[self.next].copy_(
@@ -91,17 +92,19 @@ class RolloutBuffer:
 
         self.next += 1
 
-    def insert_final_step(self, states: torch.Tensor):
+    def insert_final_step(self, input_ids: torch.Tensor, attn_masks: torch.Tensor):
         """
         Inserts the final observation observed.
         """
         with torch.no_grad():
-            self.states[self.next].copy_(states)
+            self.input_ids[self.next].copy_(input_ids)
+            self.attn_masks[self.next].copy_(attn_masks)
 
     def samples(
         self, batch_size: int, discount: float, lambda_: float, v_net: nn.Module
     ) -> list[
         Tuple[
+            torch.Tensor,
             torch.Tensor,
             torch.Tensor,
             torch.Tensor,
@@ -123,17 +126,18 @@ class RolloutBuffer:
             advantages = torch.zeros(
                 [self.num_steps, self.num_envs], dtype=torch.float, device=d
             )
-            step_returns: torch.Tensor = v_net(self.states[self.next]).squeeze()
+            step_returns: torch.Tensor = v_net(self.input_ids[self.next], self.attn_masks[self.next]).squeeze()
 
             # Calculate advantage estimates and rewards to go
             state_values = step_returns.clone()
             step_advantages = torch.zeros([self.num_envs], dtype=torch.float, device=d)
             for i in reversed(range(self.num_steps)):
-                prev_states = self.states[i]
+                prev_input_ids = self.input_ids[i]
+                prev_attn_masks = self.attn_masks[i]
                 rewards = self.rewards[i]
                 inv_dones = 1.0 - self.dones[i]
                 inv_truncs = 1.0 - self.truncs[i]
-                prev_state_values: torch.Tensor = v_net(prev_states).squeeze()
+                prev_state_values: torch.Tensor = v_net(prev_input_ids, prev_attn_masks).squeeze()
                 # Delta is the difference between the 1 step bootstrap (reward +
                 # value prediction of next state) and the value prediction of
                 # the current state
@@ -152,7 +156,8 @@ class RolloutBuffer:
             # Permute transitions to decorrelate them
             exp_count = self.num_envs * self.num_steps
             indices = torch.randperm(exp_count, dtype=torch.int, device=d)
-            rand_prev_states = self.states.flatten(0, 1).index_select(0, indices)
+            rand_prev_input_ids = self.input_ids.flatten(0, 1).index_select(0, indices)
+            rand_prev_attn_masks = self.attn_masks.flatten(0, 1).index_select(0, indices)
             rand_actions = self.actions.flatten(0, 1).index_select(0, indices)
             rand_action_probs = self.action_probs.flatten(0, 1).index_select(0, indices)
             rand_masks = self.masks.flatten(0, 1).index_select(0, indices)
@@ -165,8 +170,11 @@ class RolloutBuffer:
                 end = (i + 1) * batch_size
                 batches.append(
                     (
-                        rand_prev_states[start:end].reshape(
-                            [batch_size] + list(self.states.shape)[2:]
+                        rand_prev_input_ids[start:end].reshape(
+                            [batch_size] + list(self.input_ids.shape)[2:]
+                        ),
+                        rand_prev_attn_masks[start:end].reshape(
+                            [batch_size] + list(self.attn_masks.shape)[2:]
                         ),
                         rand_actions[start:end].reshape(
                             [batch_size] + list(self.actions.shape)[2:]
