@@ -17,14 +17,14 @@ class RolloutBuffer:
 
     def __init__(
         self,
-        max_input_len: int,
+        max_seq_len: int,
         vocab_size: int,
         num_envs: int,
         num_steps: int,
     ):
         k = torch.float
-        input_ids_shape = torch.Size([num_steps + 1, num_envs, max_input_len])
-        attn_mask_shape = torch.Size([num_steps + 1, num_envs, max_input_len])
+        input_ids_shape = torch.Size([num_steps + 1, num_envs, max_seq_len])
+        attn_mask_shape = torch.Size([num_steps + 1, num_envs, max_seq_len])
         action_shape = torch.Size([num_steps, num_envs, 1])
         action_probs_shape = torch.Size([num_steps, num_envs, vocab_size])
         self.num_envs = num_envs

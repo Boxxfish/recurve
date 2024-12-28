@@ -50,26 +50,26 @@ def train_ppo(
         batches = buffer.samples(train_batch_size, discount, lambda_, v_net_frozen)
         for (
             i,
-            (prev_input_ids, prev_attn_masks, actions, action_probs, returns, advantages, action_masks),
+            (prev_input_ids, prev_attn_masks, actions, logits, returns, advantages, action_masks),
         ) in enumerate(batches):
             # Move batch to device if applicable
             prev_input_ids = prev_input_ids.to(device=device)
             prev_attn_masks = prev_attn_masks.to(device=device)
             actions = actions.to(device=device)
-            action_probs = action_probs.to(device=device)
+            logits = logits.to(device=device)
             returns = returns.to(device=device)
             advantages = advantages.to(device=device)
             action_masks = action_masks.to(device=device)
 
             # Train policy network
             with torch.no_grad():
-                old_act_probs = Categorical(logits=action_probs).log_prob(
+                old_act_log_probs = Categorical(logits=logits).log_prob(
                     actions.squeeze()
                 )
-            new_log_probs = p_net(prev_input_ids, prev_attn_masks)
-            new_act_distr = Categorical(logits=new_log_probs)
-            new_act_probs = new_act_distr.log_prob(actions.squeeze())
-            term1 = (new_act_probs - old_act_probs).exp() * advantages.squeeze()
+            new_logits = p_net(prev_input_ids, prev_attn_masks).logits
+            new_act_distr = Categorical(logits=new_logits)
+            new_act_log_probs = new_act_distr.log_prob(actions.squeeze())
+            term1 = (new_act_log_probs - old_act_log_probs).exp() * advantages.squeeze()
             term2 = (1.0 + epsilon * advantages.squeeze().sign()) * advantages.squeeze()
             entropy = new_act_distr.entropy().mean()
             p_loss = (
