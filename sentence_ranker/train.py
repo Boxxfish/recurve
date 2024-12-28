@@ -6,8 +6,8 @@ from tqdm import tqdm
 from transformers.modeling_outputs import CausalLMOutputWithPast # type: ignore
 from transformers.models.llama import LlamaForSequenceClassification, LlamaForCausalLM, LlamaTokenizerFast  # type: ignore
 from torch.distributions import Categorical
-from yaml import load # type: ignore
-from yaml import Loader
+from yaml import load, Loader # type: ignore
+import wandb
 
 from sentence_ranker.algorithms.ppo import train_ppo
 from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
@@ -59,9 +59,7 @@ class GeneratorTrainer:
             args.gen_num_steps,
         )
         self.tokenizer = LlamaTokenizerFast.from_pretrained(args.ranker_base)
-        locs: Dict[str, Any] = {}
-        exec(compile(ds.done_fn + "\n\n" + ds.score_fn, "", "exec"), locs)
-        done_fn, score_fn = locs["done_fn"], locs["score_fn"]
+        done_fn, score_fn = ds.get_done_score_fns()
         self.envs = DSEnvs(ds, self.tokenizer, args.gen_num_envs, args.max_seq_len, done_fn, score_fn)
 
 def get_llm_logits(p_net: LlamaForCausalLM, input_ids: Tensor, attn_masks: Tensor) -> Tensor:
@@ -77,8 +75,15 @@ class RankerTrainer:
 
 
 def main():
-    # Set up experiment
     args = parse_args(Args)
+    
+    # Wandb
+    wandb.init(
+        project="sentence-ranker",
+        config=args.model_dump(),
+    )
+
+    # Set up experiment
     exp_meta = ExpMeta(args=args)
     create_directory(args.exp_base_dir, exp_meta)
 

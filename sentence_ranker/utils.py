@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 import os
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypeVar, get_args, get_origin
 
 from pydantic import BaseModel
 import torch
@@ -13,25 +13,30 @@ T = TypeVar("T", bound=BaseModel)
 def parse_args(cfg_t: type[T]) -> T:
     parser = ArgumentParser()
     for k, v in cfg_t.model_fields.items():
+        flag_name = f"--{k.replace('_', '-')}"
         if v.annotation == bool:
             parser.add_argument(
-                f"--{k.replace('_', '-')}", default=v.default, action="store_true"
+                flag_name, default=v.default, action="store_true"
+            )
+        elif get_origin(v.annotation) == Literal:
+            choices = list(get_args(v.annotation))
+            parser.add_argument(
+                flag_name, default=v.default, choices=choices, type=type(choices[0])
             )
         else:
             assert v.annotation is not None
             parser.add_argument(
-                f"--{k.replace('_', '-')}", default=v.default, type=v.annotation
+                flag_name, default=v.default, type=v.annotation
             )
     args = parser.parse_args()
     cfg = cfg_t(**args.__dict__)
     return cfg
 
 def create_directory(out_dir_: str, meta: T) -> Path:
-    assert wandb.run is not None
     for _ in range(100):
-        if wandb.run.name != "":
+        if wandb.run.name not in ["" or None]:
             break
-    if wandb.run.name != "":
+    if wandb.run.name not in ["" or None]:
         out_id = wandb.run.name
     else:
         out_id = "testing"
