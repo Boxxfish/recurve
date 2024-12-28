@@ -1,0 +1,12 @@
+main_prompt: ""
+items:
+  - prompt: Create a list of 4 programming languages, with their pros and cons. Using the list, tell me the best programming language on a newline in the form "The best programming language is ____.".
+    answer: Rust
+score_fn: |
+  def score_fn(output: str, answer: str):  
+    out_ans = output.split("The best programming language")[-1]  
+    return answer in out_ans
+done_fn: |
+  def done_fn(output: str):  
+    out_ans = output.split("The best programming language")[-1]  
+    return "." in out_ans

@@ -45,10 +45,16 @@ class DSEnvs:
         self.input_ids[:, self.nexts] = actions
         self.attn_masks[:, self.nexts] = False
         self.nexts += 1
-        dones = [self.done_fn(input_ids) for input_ids in self.input_ids]
+        dones = [
+            self.done_fn(self.tokenizer.decode(input_ids))
+            for input_ids in self.input_ids
+        ]
         rewards = [
             (
-                self.score_fn(input_ids, self.ds.items[self.ds_idxs[i]].answer)
+                self.score_fn(
+                    self.tokenizer.decode(input_ids),
+                    self.ds.items[self.ds_idxs[i]].answer,
+                )
                 if done
                 else 0.0
             )

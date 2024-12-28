@@ -3,9 +3,11 @@ from pydantic import BaseModel
 import torch
 from torch import Tensor
 from tqdm import tqdm
-from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.modeling_outputs import CausalLMOutputWithPast # type: ignore
 from transformers.models.llama import LlamaForSequenceClassification, LlamaForCausalLM, LlamaTokenizerFast  # type: ignore
 from torch.distributions import Categorical
+from yaml import load # type: ignore
+from yaml import Loader
 
 from sentence_ranker.algorithms.ppo import train_ppo
 from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
@@ -18,6 +20,7 @@ class Args(BaseModel):
     exp_base_dir: str = "./runs"
     iterations: int = 1_000
     device: str = "cuda"
+    dataset: str
 
     # Ranker settings
     ranker_base: str = "meta-llama/Llama-3.2-1B"
@@ -79,8 +82,13 @@ def main():
     exp_meta = ExpMeta(args=args)
     create_directory(args.exp_base_dir, exp_meta)
 
+    # Load dataset
+    with open(args.dataset, "r") as f:
+        data = load(f, Loader=Loader)
+        dataset = Dataset.model_validate(data)
+
     # Set up trainers
-    gen_trainer = GeneratorTrainer(args)
+    gen_trainer = GeneratorTrainer(args, dataset)
 
     device = torch.device(args.device)
     for _ in tqdm(range(args.iterations), position=0):
