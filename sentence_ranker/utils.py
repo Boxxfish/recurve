@@ -50,7 +50,7 @@ def create_directory(out_dir_: str, meta: T) -> Path:
     except OSError as e:
         print(e)
     with open(exp_dir / "meta.json", "w") as f:
-        f.write(meta.model_dump_json())
+        f.write(meta.model_dump_json(indent=2))
 
     chkpt_path = exp_dir / "checkpoints"
     try:

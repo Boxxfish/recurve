@@ -21,6 +21,7 @@ class Args(BaseModel):
     iterations: int = 1_000
     device: str = "cuda"
     dataset: str
+    save_every: int = 10
 
     # Ranker settings
     ranker_base: str = "meta-llama/Llama-3.2-1B"
@@ -109,7 +110,7 @@ def main():
 
     # Set up experiment
     exp_meta = ExpMeta(args=args)
-    create_directory(args.exp_base_dir, exp_meta)
+    chkpt_dir = create_directory(args.exp_base_dir, exp_meta)
 
     # Load dataset
     with open(args.dataset, "r") as f:
@@ -120,7 +121,7 @@ def main():
     gen_trainer = GeneratorTrainer(args, dataset)
 
     device = torch.device(args.device)
-    for _ in tqdm(range(args.iterations), position=0):
+    for train_step in tqdm(range(args.iterations), position=0):
         ####
         ## Generator
         ####
@@ -178,6 +179,10 @@ def main():
                 )
                 gen_trainer.buffer.clear()
 
+        # Save artifacts
+        if train_step % args.save_every == 0:
+            gen_trainer.p_net.save_pretrained(str(chkpt_dir / f"gen_p_net-{train_step}"), from_pt=True)
+            gen_trainer.v_net.save_pretrained(str(chkpt_dir / f"gen_v_net-{train_step}"), from_pt=True)
 
 if __name__ == "__main__":
     main()
