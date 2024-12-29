@@ -43,7 +43,7 @@ class Args(BaseModel):
     gen_v_lr: float = 0.001
     gen_grad_steps: int = 1 # Number of gradient steps to take during PPO
     gen_entropy_coeff: float = 0.0 # Entropy coefficient for PPO
-    gen_sft_coeff: float = 0.0 # SFT coefficient for PPO (Prevents logit collapse)
+    gen_sft_coeff: float = 0.1 # SFT coefficient for PPO (Prevents logit collapse)
 
 
 class ExpMeta(BaseModel):
