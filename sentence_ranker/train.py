@@ -2,7 +2,6 @@ import copy
 from typing import *
 from pydantic import BaseModel
 import torch
-from torch import Tensor
 from tqdm import tqdm
 from transformers.models.llama import LlamaForSequenceClassification, LlamaForCausalLM, LlamaTokenizerFast  # type: ignore
 from torch.distributions import Categorical
@@ -28,6 +27,7 @@ class Args(BaseModel):
 
     # Generator settings
     generator_base: str = "meta-llama/Llama-3.2-1B-Instruct"
+    generator_sft: str = "meta-llama/Llama-3.2-1B-Instruct"
     max_seq_len: int = (
         256  # Max length of an input, including the prompt + special tokens
     )
@@ -43,6 +43,7 @@ class Args(BaseModel):
     gen_v_lr: float = 0.001
     gen_grad_steps: int = 1 # Number of gradient steps to take during PPO
     gen_entropy_coeff: float = 0.0 # Entropy coefficient for PPO
+    gen_sft_coeff: float = 0.0 # SFT coefficient for PPO (Prevents logit collapse)
 
 
 class ExpMeta(BaseModel):
@@ -53,15 +54,17 @@ class GeneratorTrainer:
     def __init__(self, args: Args, ds: Dataset):
         self.tokenizer = LlamaTokenizerFast.from_pretrained(args.generator_base)
 
+        # Policy model
         p_net_lora_cfg = LoraConfig(
             task_type="CAUSAL_LM",
             r=8,
             lora_alpha=32,
             lora_dropout=0.1,
         )
-        p_net_base = LlamaForCausalLM.from_pretrained(args.generator_base, device_map=args.device)
+        p_net_base = LlamaForCausalLM.from_pretrained(args.generator_base)
         self.p_net = LoraModel(p_net_base, p_net_lora_cfg, "default")
         
+        # Value model
         v_net_lora_cfg = LoraConfig(
             task_type="SEQ_CLS",
             r=8,
@@ -73,6 +76,8 @@ class GeneratorTrainer:
         v_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
         v_net_base = LlamaForSequenceClassification.from_pretrained(args.generator_base, config=v_net_cfg)
         self.v_net = LoraModel(v_net_base, v_net_lora_cfg, "default")
+
+        self.sft_net = LlamaForCausalLM.from_pretrained(args.generator_sft)
 
         self.p_opt = torch.optim.Adam(self.p_net.parameters(), lr=args.gen_p_lr)
         self.v_opt = torch.optim.Adam(self.v_net.parameters(), lr=args.gen_v_lr)
@@ -123,8 +128,10 @@ def main():
             input_ids, attn_masks = gen_trainer.envs.reset()
             for _ in range(args.gen_train_loop_iters):
                 # Sample with generator policy
-                gen_trainer.p_net.to(device)
                 with torch.no_grad():
+                    # Step through env with generator policy and collect transitions
+                    print("Collecting generator transitions...")
+                    gen_trainer.p_net.to(device)
                     for _ in tqdm(range(args.gen_num_steps), position=1):
                         logits = get_llm_logits(gen_trainer.p_net, input_ids.to(device=device), attn_masks.to(device=device))
                         actions = Categorical(logits=logits).sample().to(device="cpu")
@@ -139,6 +146,18 @@ def main():
                         )
                         input_ids, attn_masks = input_ids_, attn_masks_
                     gen_trainer.buffer.insert_final_step(input_ids, attn_masks)
+                    gen_trainer.p_net.cpu()
+
+                    # Run SFT model over transitions and collect logits
+                    print("Collecting SFT logits...")
+                    gen_trainer.sft_net.to(device)
+                    for buffer_idx in tqdm(range(args.gen_num_steps), position=1):
+                        input_ids = gen_trainer.buffer.input_ids[buffer_idx]
+                        attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
+                        logits = get_llm_logits(gen_trainer.sft_net, input_ids.to(device=device), attn_masks.to(device=device))
+                        gen_trainer.buffer.sft_action_probs[buffer_idx].copy_(logits)
+
+                    gen_trainer.sft_net.cpu()
 
                 # Train generator
                 total_p_loss, total_v_loss = train_ppo(
@@ -153,6 +172,7 @@ def main():
                     1.0,
                     args.gen_lambda,
                     args.gen_epsilon,
+                    args.gen_sft_coeff,
                     gradient_steps=args.gen_grad_steps,
                     entropy_coeff=args.gen_entropy_coeff,
                 )

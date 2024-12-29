@@ -52,6 +52,9 @@ class RolloutBuffer:
         self.masks = torch.zeros(
             action_probs_shape, dtype=torch.int, device=d, requires_grad=False
         )
+        self.sft_action_probs = torch.zeros(
+            action_probs_shape, dtype=torch.int, device=d, requires_grad=False
+        )
 
     def insert_step(
         self,
@@ -111,6 +114,7 @@ class RolloutBuffer:
             torch.Tensor,
             torch.Tensor,
             torch.Tensor,
+            torch.Tensor,
         ]
     ]:
         """
@@ -160,6 +164,7 @@ class RolloutBuffer:
             rand_prev_attn_masks = self.attn_masks.flatten(0, 1).index_select(0, indices)
             rand_actions = self.actions.flatten(0, 1).index_select(0, indices)
             rand_action_probs = self.action_probs.flatten(0, 1).index_select(0, indices)
+            rand_sft_action_probs = self.sft_action_probs.flatten(0, 1).index_select(0, indices)
             rand_masks = self.masks.flatten(0, 1).index_select(0, indices)
             rand_returns = returns.flatten(0, 1).index_select(0, indices)
             rand_advantages = advantages.flatten(0, 1).index_select(0, indices)
@@ -180,6 +185,9 @@ class RolloutBuffer:
                             [batch_size] + list(self.actions.shape)[2:]
                         ),
                         rand_action_probs[start:end].reshape(
+                            [batch_size] + list(self.action_probs.shape)[2:]
+                        ),
+                        rand_sft_action_probs[start:end].reshape(
                             [batch_size] + list(self.action_probs.shape)[2:]
                         ),
                         rand_returns[start:end].reshape([batch_size, 1]),

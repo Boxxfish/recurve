@@ -23,6 +23,7 @@ def train_ppo(
     discount: float,
     lambda_: float,
     epsilon: float,
+    sft_coeff: float,
     gradient_steps: int = 1,
     entropy_coeff: float = 0.0,
 ) -> Tuple[float, float]:
@@ -53,13 +54,14 @@ def train_ppo(
         v_net_frozen.cpu()
         for (
             i,
-            (prev_input_ids, prev_attn_masks, actions, logits, returns, advantages, action_masks),
+            (prev_input_ids, prev_attn_masks, actions, logits, sft_logits, returns, advantages, action_masks),
         ) in enumerate(batches):
             # Move batch to device if applicable
             prev_input_ids = prev_input_ids.to(device=device)
             prev_attn_masks = prev_attn_masks.to(device=device)
             actions = actions.to(device=device)
             logits = logits.to(device=device)
+            sft_logits = sft_logits.to(device=device)
             returns = returns.to(device=device)
             advantages = advantages.to(device=device)
 
@@ -72,12 +74,22 @@ def train_ppo(
             new_logits = get_llm_logits(p_net, prev_input_ids, prev_attn_masks)
             new_act_distr = Categorical(logits=new_logits)
             new_act_log_probs = new_act_distr.log_prob(actions.squeeze())
+            
+            # Clipped PPO loss term
             term1 = (new_act_log_probs - old_act_log_probs).exp() * advantages.squeeze()
             term2 = (1.0 + epsilon * advantages.squeeze().sign()) * advantages.squeeze()
-            entropy = new_act_distr.entropy().mean()
+            ppo_term = -term1.min(term2).mean()
+
+            # Entropy term
+            entropy_term = -entropy_coeff * new_act_distr.entropy().mean()
+
+            # SFT term
+            sft_act_distr = Categorical(logits=sft_logits)
+            sft_term = sft_coeff * torch.distributions.kl_divergence(new_act_distr, sft_act_distr).mean()
+            
             p_loss = (
-                -term1.min(term2).mean() / gradient_steps + -entropy * entropy_coeff
-            )
+                ppo_term + entropy_term + sft_term + sft_term
+            ) / gradient_steps
             p_loss.backward()
             total_p_loss += p_loss.item()
             p_net.cpu()
