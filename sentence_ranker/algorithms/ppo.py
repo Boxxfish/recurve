@@ -35,11 +35,6 @@ def train_ppo(
         adjusting weights.
         use_masks: If True, masks are passed to the model.
     """
-    def to_dev(net: nn.Module) -> nn.Module:
-        if device.type != "cpu":
-            net.to(device)
-        return net
-
     p_net.cpu()
     v_net.cpu()
 
@@ -54,9 +49,8 @@ def train_ppo(
     v_opt.zero_grad()
 
     for _ in tqdm(range(train_iters), position=1):
-        batches = buffer.samples(train_batch_size, discount, lambda_, to_dev(v_net_frozen), device)
+        batches = buffer.samples(train_batch_size, discount, lambda_, v_net_frozen.to(device), device)
         v_net_frozen.cpu()
-        p_net.to(device)
         for (
             i,
             (prev_input_ids, prev_attn_masks, actions, logits, returns, advantages, action_masks),
@@ -70,6 +64,7 @@ def train_ppo(
             advantages = advantages.to(device=device)
 
             # Train policy network
+            p_net.to(device)
             with torch.no_grad():
                 old_act_log_probs = Categorical(logits=logits).log_prob(
                     actions.squeeze()
@@ -85,12 +80,15 @@ def train_ppo(
             )
             p_loss.backward()
             total_p_loss += p_loss.item()
+            p_net.cpu()
 
             # Train value network
-            diff = v_net(prev_input_ids, prev_attn_masks).logits - returns
+            v_net.to(device)
+            diff = v_net(prev_input_ids, prev_attn_masks).logits.squeeze() - returns
             v_loss = (diff * diff).mean() / gradient_steps
             v_loss.backward()
             total_v_loss += v_loss.item()
+            v_net.cpu()
 
             if (i + 1) % gradient_steps == 0:
                 p_opt.step()

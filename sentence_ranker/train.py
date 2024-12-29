@@ -8,6 +8,7 @@ from transformers.models.llama import LlamaForSequenceClassification, LlamaForCa
 from torch.distributions import Categorical
 from yaml import load, Loader # type: ignore
 import wandb
+from peft import LoraConfig, LoraModel
 
 from sentence_ranker.algorithms.ppo import train_ppo
 from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
@@ -30,7 +31,7 @@ class Args(BaseModel):
     max_seq_len: int = (
         256  # Max length of an input, including the prompt + special tokens
     )
-    gen_num_envs: int = 8  # Number of parallel generations during sampling
+    gen_num_envs: int = 2  # Number of parallel generations during sampling
     gen_num_steps: int = 512  # How many steps to take during sampling
     gen_train_mode: Literal["frozen", "sentence", "full"] = "frozen"
     gen_train_loop_iters: int = 10 # Number of times to run the generator training loop per iteration
@@ -40,6 +41,8 @@ class Args(BaseModel):
     gen_epsilon: float = 0.2  # Probability ratio cutoff for PPO
     gen_p_lr: float = 0.0001
     gen_v_lr: float = 0.001
+    gen_grad_steps: int = 1 # Number of gradient steps to take during PPO
+    gen_entropy_coeff: float = 0.0 # Entropy coefficient for PPO
 
 
 class ExpMeta(BaseModel):
@@ -49,11 +52,28 @@ class ExpMeta(BaseModel):
 class GeneratorTrainer:
     def __init__(self, args: Args, ds: Dataset):
         self.tokenizer = LlamaTokenizerFast.from_pretrained(args.generator_base)
-        self.p_net = LlamaForCausalLM.from_pretrained(args.generator_base, device_map=args.device)
+
+        p_net_lora_cfg = LoraConfig(
+            task_type="CAUSAL_LM",
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )
+        p_net_base = LlamaForCausalLM.from_pretrained(args.generator_base, device_map=args.device)
+        self.p_net = LoraModel(p_net_base, p_net_lora_cfg, "default")
+        
+        v_net_lora_cfg = LoraConfig(
+            task_type="SEQ_CLS",
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )
         v_net_cfg = copy.deepcopy(self.p_net.config)
         v_net_cfg.num_labels = 1
         v_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
-        self.v_net = LlamaForSequenceClassification.from_pretrained(args.generator_base, config=v_net_cfg)
+        v_net_base = LlamaForSequenceClassification.from_pretrained(args.generator_base, config=v_net_cfg)
+        self.v_net = LoraModel(v_net_base, v_net_lora_cfg, "default")
+
         self.p_opt = torch.optim.Adam(self.p_net.parameters(), lr=args.gen_p_lr)
         self.v_opt = torch.optim.Adam(self.v_net.parameters(), lr=args.gen_v_lr)
         self.buffer = RolloutBuffer(
@@ -103,6 +123,7 @@ def main():
             input_ids, attn_masks = gen_trainer.envs.reset()
             for _ in range(args.gen_train_loop_iters):
                 # Sample with generator policy
+                gen_trainer.p_net.to(device)
                 with torch.no_grad():
                     for _ in tqdm(range(args.gen_num_steps), position=1):
                         logits = get_llm_logits(gen_trainer.p_net, input_ids.to(device=device), attn_masks.to(device=device))
@@ -132,6 +153,8 @@ def main():
                     1.0,
                     args.gen_lambda,
                     args.gen_epsilon,
+                    gradient_steps=args.gen_grad_steps,
+                    entropy_coeff=args.gen_entropy_coeff,
                 )
                 gen_trainer.buffer.clear()
 
