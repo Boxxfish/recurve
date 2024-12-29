@@ -101,7 +101,7 @@ class RolloutBuffer:
             self.attn_masks[self.next].copy_(attn_masks)
 
     def samples(
-        self, batch_size: int, discount: float, lambda_: float, v_net: nn.Module
+        self, batch_size: int, discount: float, lambda_: float, v_net: nn.Module, net_device: torch.device
     ) -> list[
         Tuple[
             torch.Tensor,
@@ -126,7 +126,7 @@ class RolloutBuffer:
             advantages = torch.zeros(
                 [self.num_steps, self.num_envs], dtype=torch.float, device=d
             )
-            step_returns: torch.Tensor = v_net(self.input_ids[self.next], self.attn_masks[self.next]).squeeze()
+            step_returns: torch.Tensor = v_net(self.input_ids[self.next].to(device=net_device), self.attn_masks[self.next].to(device=net_device)).logits.squeeze().cpu()
 
             # Calculate advantage estimates and rewards to go
             state_values = step_returns.clone()
@@ -137,7 +137,7 @@ class RolloutBuffer:
                 rewards = self.rewards[i]
                 inv_dones = 1.0 - self.dones[i]
                 inv_truncs = 1.0 - self.truncs[i]
-                prev_state_values: torch.Tensor = v_net(prev_input_ids, prev_attn_masks).squeeze()
+                prev_state_values: torch.Tensor = v_net(prev_input_ids.to(device=net_device), prev_attn_masks.to(device=net_device)).logits.squeeze().cpu()
                 # Delta is the difference between the 1 step bootstrap (reward +
                 # value prediction of next state) and the value prediction of
                 # the current state

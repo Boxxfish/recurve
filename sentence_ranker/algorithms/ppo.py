@@ -6,6 +6,8 @@ from torch import nn
 from torch.distributions import Categorical
 from tqdm import tqdm
 
+from sentence_ranker.utils import get_llm_logits
+
 from .rollout_buffer import RolloutBuffer
 
 
@@ -33,12 +35,17 @@ def train_ppo(
         adjusting weights.
         use_masks: If True, masks are passed to the model.
     """
+    def to_dev(net: nn.Module) -> nn.Module:
+        if device.type != "cpu":
+            net.to(device)
+        return net
+
+    p_net.cpu()
+    v_net.cpu()
+
     p_net.train()
     v_net_frozen = copy.deepcopy(v_net)
     v_net.train()
-    if device.type != "cpu":
-        p_net.to(device)
-        v_net.to(device)
 
     total_v_loss = 0.0
     total_p_loss = 0.0
@@ -47,7 +54,9 @@ def train_ppo(
     v_opt.zero_grad()
 
     for _ in tqdm(range(train_iters), position=1):
-        batches = buffer.samples(train_batch_size, discount, lambda_, v_net_frozen)
+        batches = buffer.samples(train_batch_size, discount, lambda_, to_dev(v_net_frozen), device)
+        v_net_frozen.cpu()
+        p_net.to(device)
         for (
             i,
             (prev_input_ids, prev_attn_masks, actions, logits, returns, advantages, action_masks),
@@ -59,14 +68,13 @@ def train_ppo(
             logits = logits.to(device=device)
             returns = returns.to(device=device)
             advantages = advantages.to(device=device)
-            action_masks = action_masks.to(device=device)
 
             # Train policy network
             with torch.no_grad():
                 old_act_log_probs = Categorical(logits=logits).log_prob(
                     actions.squeeze()
                 )
-            new_logits = p_net(prev_input_ids, prev_attn_masks).logits
+            new_logits = get_llm_logits(p_net, prev_input_ids, prev_attn_masks)
             new_act_distr = Categorical(logits=new_logits)
             new_act_log_probs = new_act_distr.log_prob(actions.squeeze())
             term1 = (new_act_log_probs - old_act_log_probs).exp() * advantages.squeeze()
@@ -79,7 +87,7 @@ def train_ppo(
             total_p_loss += p_loss.item()
 
             # Train value network
-            diff = v_net(prev_input_ids, prev_attn_masks) - returns
+            diff = v_net(prev_input_ids, prev_attn_masks).logits - returns
             v_loss = (diff * diff).mean() / gradient_steps
             v_loss.backward()
             total_v_loss += v_loss.item()
@@ -90,9 +98,8 @@ def train_ppo(
                 p_opt.zero_grad()
                 v_opt.zero_grad()
 
-    if device.type != "cpu":
-        p_net.cpu()
-        v_net.cpu()
+    p_net.cpu()
+    v_net.cpu()
     p_net.eval()
     v_net.eval()
 

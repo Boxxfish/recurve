@@ -23,6 +23,14 @@ class Dataset(BaseModel):
         done_fn, score_fn = locs["done_fn"], locs["score_fn"]
         return done_fn, score_fn
 
+LLAMA_TEMPLATE = """
+{{ bos_token }}{% for message in messages -%}
+{{ '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' + message['content'] | trim + '<|eot_id|>' }}
+{%- endfor %}
+{% if add_generation_prompt %}
+{{ '<|start_header_id|>' + 'assistant' + '<|end_header_id|>\n\n' }}
+{% endif %}
+""".strip()
 
 class DSEnvs:
     def __init__(
@@ -66,11 +74,11 @@ class DSEnvs:
             )
             for i, (done, input_ids, next) in enumerate(zip(dones, self.input_ids, self.nexts))
         ]
-        truncs = [False] * self.num_envs
-        states = (self.input_ids.clone(), self.attn_masks.clone())
-        for i, done in enumerate(dones):
-            if done:
+        truncs = [next == self.max_seq_len for next in self.nexts]
+        for i, (done, trunc) in enumerate(zip(dones, truncs)):
+            if done or trunc:
                 self._reset_env(i)
+        states = (self.input_ids.clone(), self.attn_masks.clone())
         return (states, rewards, dones, truncs, {})
 
     def reset(self) -> Tuple[Tensor, Tensor]:
@@ -93,13 +101,17 @@ class DSEnvs:
         ds_item = self.ds.items[ds_idx]
         instr = self.ds.main_prompt + "\n" + ds_item.prompt
         inpt = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": instr}],
+            [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": instr}
+            ],
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=True,
+            chat_template=LLAMA_TEMPLATE,
         )
         self.input_ids[i, :len(inpt.input_ids[0])] = inpt.input_ids[0]
-        self.attn_masks[i, :len(inpt.attention_mask[0])] = inpt.attention_mask[0]
+        self.attn_masks[i, :len(inpt.input_ids[0])] = True
         num_toks = inpt.input_ids.shape[1]
         self.nexts[i] = num_toks
 

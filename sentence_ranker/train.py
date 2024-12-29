@@ -1,9 +1,9 @@
+import copy
 from typing import *
 from pydantic import BaseModel
 import torch
 from torch import Tensor
 from tqdm import tqdm
-from transformers.modeling_outputs import CausalLMOutputWithPast # type: ignore
 from transformers.models.llama import LlamaForSequenceClassification, LlamaForCausalLM, LlamaTokenizerFast  # type: ignore
 from torch.distributions import Categorical
 from yaml import load, Loader # type: ignore
@@ -13,7 +13,7 @@ from sentence_ranker.algorithms.ppo import train_ppo
 from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
 from sentence_ranker.algorithms.rollout_buffer import RolloutBuffer
 from sentence_ranker.datasets import DSEnvs, Dataset
-from sentence_ranker.utils import create_directory, parse_args
+from sentence_ranker.utils import create_directory, get_llm_logits, parse_args
 
 
 class Args(BaseModel):
@@ -48,8 +48,12 @@ class ExpMeta(BaseModel):
 
 class GeneratorTrainer:
     def __init__(self, args: Args, ds: Dataset):
-        self.p_net = LlamaForCausalLM.from_pretrained(args.ranker_base)
-        self.v_net = LlamaForSequenceClassification.from_pretrained(args.ranker_base)
+        self.tokenizer = LlamaTokenizerFast.from_pretrained(args.generator_base)
+        self.p_net = LlamaForCausalLM.from_pretrained(args.generator_base, device_map=args.device)
+        v_net_cfg = copy.deepcopy(self.p_net.config)
+        v_net_cfg.num_labels = 1
+        v_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
+        self.v_net = LlamaForSequenceClassification.from_pretrained(args.generator_base, config=v_net_cfg)
         self.p_opt = torch.optim.Adam(self.p_net.parameters(), lr=args.gen_p_lr)
         self.v_opt = torch.optim.Adam(self.v_net.parameters(), lr=args.gen_v_lr)
         self.buffer = RolloutBuffer(
@@ -58,13 +62,8 @@ class GeneratorTrainer:
             args.gen_num_envs,
             args.gen_num_steps,
         )
-        self.tokenizer = LlamaTokenizerFast.from_pretrained(args.ranker_base)
         done_fn, score_fn = ds.get_done_score_fns()
         self.envs = DSEnvs(ds, self.tokenizer, args.gen_num_envs, args.max_seq_len, done_fn, score_fn)
-
-def get_llm_logits(p_net: LlamaForCausalLM, input_ids: Tensor, attn_masks: Tensor) -> Tensor:
-    model_out: CausalLMOutputWithPast = p_net.forward(input_ids, attn_masks, return_dict=True)
-    return model_out.logits
 
 class RankerTrainer:
 
@@ -106,8 +105,8 @@ def main():
                 # Sample with generator policy
                 with torch.no_grad():
                     for _ in tqdm(range(args.gen_num_steps), position=1):
-                        logits = get_llm_logits(gen_trainer.p_net, input_ids, attn_masks)
-                        actions = Categorical(logits=logits).sample()
+                        logits = get_llm_logits(gen_trainer.p_net, input_ids.to(device=device), attn_masks.to(device=device))
+                        actions = Categorical(logits=logits).sample().to(device="cpu")
                         (input_ids_, attn_masks_), rewards, dones, truncs, _ = gen_trainer.envs.step(actions)
                         gen_trainer.buffer.insert_step(
                             input_ids, attn_masks,
