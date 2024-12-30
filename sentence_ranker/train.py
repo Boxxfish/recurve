@@ -23,7 +23,8 @@ class Args(BaseModel):
     device: str = "cuda"
     dataset: str
     save_every: int = 10
-    eval_every: int = 10
+    eval_every: int = 1
+    num_eval_runs: int = 10
 
     # Ranker settings
     ranker_base: str = "meta-llama/Llama-3.2-1B"
@@ -196,7 +197,7 @@ def main():
         # Run eval
         if train_step % args.eval_every == 0:
             gen_trainer.p_net.to(device)
-            eval_results = run_eval({}, dataset, gen_trainer.tokenizer, args.max_seq_len, 1, gen_trainer.p_net, device)
+            eval_results = run_eval({}, dataset, gen_trainer.tokenizer, args.max_seq_len, args.num_eval_runs, gen_trainer.p_net, device)
             log_dict.update({
                 "eval_score": eval_results.avg_score
             })

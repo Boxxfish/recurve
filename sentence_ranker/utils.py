@@ -61,7 +61,8 @@ def create_directory(out_dir_: str, meta: T) -> Path:
 
 def get_llm_logits(p_net: LlamaForCausalLM, input_ids: torch.Tensor, attn_masks: torch.Tensor) -> torch.Tensor:
     input_lens = attn_masks.byte().argmin(1) - 1
-    model_out: CausalLMOutputWithPast = p_net.forward(input_ids, attn_masks, return_dict=True)
+    max_len = input_lens.amax().item() + 1
+    model_out: CausalLMOutputWithPast = p_net.forward(input_ids[:, :max_len], attn_masks[:, :max_len], return_dict=True)
     return model_out.logits[torch.arange(0, model_out.logits.shape[0]), input_lens, :]
 
 def copy_params(src: nn.Module, dest: nn.Module):

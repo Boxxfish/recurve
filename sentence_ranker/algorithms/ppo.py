@@ -92,6 +92,10 @@ def train_ppo(
             ) / gradient_steps
             p_loss.backward()
             total_p_loss += p_loss.item()
+            
+            if (i + 1) % gradient_steps == 0:
+                p_opt.step()
+                p_opt.zero_grad()
             p_net.cpu()
 
             # Train value network
@@ -100,13 +104,11 @@ def train_ppo(
             v_loss = (diff * diff).mean() / gradient_steps
             v_loss.backward()
             total_v_loss += v_loss.item()
-            v_net.cpu()
 
             if (i + 1) % gradient_steps == 0:
-                p_opt.step()
                 v_opt.step()
-                p_opt.zero_grad()
                 v_opt.zero_grad()
+            v_net.cpu()
 
     p_net.cpu()
     v_net.cpu()
