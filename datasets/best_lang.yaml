@@ -10,7 +10,6 @@ score_fn: |
 done_fn: |
   def done_fn(text: str):
     output = text.split("<|end_header_id|>")[-1]
-    # print(text)
     if "best programming language" not in output:
       return False
     out_ans = output.split("best programming language")[-1]

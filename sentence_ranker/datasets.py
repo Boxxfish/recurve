@@ -59,20 +59,21 @@ class DSEnvs:
         self.input_ids[torch.arange(0, self.num_envs), self.nexts] = actions.int()
         self.attn_masks[torch.arange(0, self.num_envs), self.nexts] = True
         self.nexts += 1
+        texts = self.get_current_texts()
         dones = [
-            self.done_fn(self.tokenizer.decode(input_ids[:next]))
-            for input_ids, next in zip(self.input_ids, self.nexts)
+            self.done_fn(text)
+            for text in texts
         ]
         rewards = [
             (
                 self.score_fn(
-                    self.tokenizer.decode(input_ids[:next]),
+                    text,
                     self.ds.items[self.ds_idxs[i]].answer,
                 )
                 if done
                 else 0.0
             )
-            for i, (done, input_ids, next) in enumerate(zip(dones, self.input_ids, self.nexts))
+            for i, (done, text) in enumerate(zip(dones, texts))
         ]
         truncs = [next == self.max_seq_len for next in self.nexts]
         for i, (done, trunc) in enumerate(zip(dones, truncs)):
@@ -88,15 +89,28 @@ class DSEnvs:
             random.randrange(0, len(self.ds.items)) for _ in range(self.num_envs)
         ]
         return self.input_ids, self.attn_masks
+    
+    def use_item(self, item_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Sets the dataset item to use for this episode."""
+        self._reset_env(0, item_idx)
+        return self.input_ids.clone(), self.attn_masks.clone()
 
-    def _reset_env(self, i: int):
+    def get_current_texts(self) -> List[str]:
+        """Returns the text in each environment."""
+        return [
+            self.tokenizer.decode(input_ids[:next])
+            for input_ids, next in zip(self.input_ids, self.nexts)
+        ]
+
+    def _reset_env(self, i: int, ds_idx: Optional[int] = None):
         # Clear previous text
         self.input_ids[i, :] = self.tokenizer.pad_token_type_id
         self.attn_masks[i, :] = False
         self.nexts[i] = 0  # Make sure this is updated when adding the prompt!
 
         # Update text with new dataset item
-        ds_idx = random.randrange(0, len(self.ds.items))
+        if ds_idx is None:
+            ds_idx = random.randrange(0, len(self.ds.items))
         self.ds_idxs[i] = ds_idx
         ds_item = self.ds.items[ds_idx]
         instr = self.ds.main_prompt + "\n" + ds_item.prompt

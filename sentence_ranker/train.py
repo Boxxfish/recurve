@@ -62,8 +62,8 @@ class GeneratorTrainer:
             lora_alpha=32,
             lora_dropout=0.1,
         )
-        p_net_base = LlamaForCausalLM.from_pretrained(args.generator_base)
-        self.p_net = LoraModel(p_net_base, p_net_lora_cfg, "default")
+        self.p_net = LlamaForCausalLM.from_pretrained(args.generator_base)
+        self.p_net.add_adapter(p_net_lora_cfg, "default")
         
         # Value model
         v_net_lora_cfg = LoraConfig(
@@ -75,8 +75,8 @@ class GeneratorTrainer:
         v_net_cfg = copy.deepcopy(self.p_net.config)
         v_net_cfg.num_labels = 1
         v_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
-        v_net_base = LlamaForSequenceClassification.from_pretrained(args.generator_base, config=v_net_cfg)
-        self.v_net = LoraModel(v_net_base, v_net_lora_cfg, "default")
+        self.v_net = LlamaForSequenceClassification.from_pretrained(args.generator_base, config=v_net_cfg)
+        self.v_net.add_adapter(v_net_lora_cfg, "default")
 
         self.sft_net = LlamaForCausalLM.from_pretrained(args.generator_sft)
 
@@ -127,6 +127,7 @@ def main():
         ####
         if args.gen_train_mode != "frozen":
             input_ids, attn_masks = gen_trainer.envs.reset()
+            avg_p_loss, avg_v_loss = 0.0, 0.0
             for _ in range(args.gen_train_loop_iters):
                 # Sample with generator policy
                 with torch.no_grad():
@@ -178,11 +179,22 @@ def main():
                     entropy_coeff=args.gen_entropy_coeff,
                 )
                 gen_trainer.buffer.clear()
+                avg_p_loss += total_p_loss
+                avg_v_loss += total_v_loss
+            
+        # Log metrics
+        avg_p_loss = avg_p_loss / args.gen_train_loop_iters
+        avg_v_loss = avg_v_loss / args.gen_train_loop_iters
+        wandb.log({
+            "gen_avg_p_loss": avg_p_loss,
+            "gen_avg_v_loss": avg_v_loss,
+        })
 
         # Save artifacts
         if train_step % args.save_every == 0:
-            gen_trainer.p_net.save_pretrained(str(chkpt_dir / f"gen_p_net-{train_step}"), from_pt=True)
-            gen_trainer.v_net.save_pretrained(str(chkpt_dir / f"gen_v_net-{train_step}"), from_pt=True)
+            for label in [str(train_step), "latest"]:
+                gen_trainer.p_net.save_pretrained(str(chkpt_dir / f"gen_p_net-{label}"), from_pt=True)
+                gen_trainer.v_net.save_pretrained(str(chkpt_dir / f"gen_v_net-{label}"), from_pt=True)
 
 if __name__ == "__main__":
     main()
