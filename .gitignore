@@ -3,6 +3,7 @@
 
 runs/
 eval_results.json
+nohup.out
 
 # WandB files
 wandb/

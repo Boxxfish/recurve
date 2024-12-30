@@ -13,6 +13,7 @@ from sentence_ranker.algorithms.ppo import train_ppo
 from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
 from sentence_ranker.algorithms.rollout_buffer import RolloutBuffer
 from sentence_ranker.datasets import DSEnvs, Dataset
+from sentence_ranker.eval_utils import run_eval
 from sentence_ranker.utils import create_directory, get_llm_logits, parse_args
 
 
@@ -22,6 +23,7 @@ class Args(BaseModel):
     device: str = "cuda"
     dataset: str
     save_every: int = 10
+    eval_every: int = 10
 
     # Ranker settings
     ranker_base: str = "meta-llama/Llama-3.2-1B"
@@ -182,13 +184,25 @@ def main():
                 avg_p_loss += total_p_loss
                 avg_v_loss += total_v_loss
             
+
         # Log metrics
         avg_p_loss = avg_p_loss / args.gen_train_loop_iters
         avg_v_loss = avg_v_loss / args.gen_train_loop_iters
-        wandb.log({
+        log_dict = {
             "gen_avg_p_loss": avg_p_loss,
             "gen_avg_v_loss": avg_v_loss,
-        })
+        }
+
+        # Run eval
+        if train_step % args.eval_every == 0:
+            gen_trainer.p_net.to(device)
+            eval_results = run_eval({}, dataset, gen_trainer.tokenizer, args.max_seq_len, 1, gen_trainer.p_net, device)
+            log_dict.update({
+                "eval_score": eval_results.avg_score
+            })
+            gen_trainer.p_net.cpu()
+
+        wandb.log(log_dict)
 
         # Save artifacts
         if train_step % args.save_every == 0:
