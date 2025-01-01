@@ -16,7 +16,7 @@ from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
 from sentence_ranker.algorithms.rollout_buffer import RolloutBuffer
 from sentence_ranker.datasets import DSEnvs, Dataset
 from sentence_ranker.eval_utils import run_eval
-from sentence_ranker.utils import create_directory, get_llm_logits, parse_args
+from sentence_ranker.utils import create_directory, get_llm_logits, get_llm_scores, parse_args
 
 
 class Args(BaseModel):
@@ -175,7 +175,7 @@ def main():
                         action = random.randrange(0, args.ranker_candidates)
                     else:
                         ranker_trainer.q_net.to(device)
-                        q_vals = ranker_trainer.q_net.forward(input_ids.squeeze(0).to(device), attn_masks.squeeze(0).to(device)).logits.squeeze(-1) # Shape: (num_candidates)
+                        q_vals = get_llm_scores(ranker_trainer.q_net, input_ids.to(device), attn_masks.to(device)).squeeze(0) # Shape: (num_candidates)
                         ranker_trainer.q_net.cpu()
                         action = q_vals.argmax(0).cpu().item()
                     actions = torch.tensor([action])
@@ -291,7 +291,7 @@ def main():
         # Run eval
         if train_step % args.eval_every == 0:
             gen_trainer.p_net.to(device)
-            eval_results = run_eval({}, dataset, gen_trainer.tokenizer, args.max_seq_len, args.num_eval_runs, gen_trainer.p_net, device, args.ranker_candidates)
+            eval_results = run_eval({}, dataset, gen_trainer.tokenizer, args.max_seq_len, args.num_eval_runs, gen_trainer.p_net, device, args.ranker_candidates, ranker_trainer.q_net)
             log_dict.update({
                 "eval_score": eval_results.avg_score
             })

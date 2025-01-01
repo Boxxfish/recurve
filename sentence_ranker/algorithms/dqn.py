@@ -3,6 +3,8 @@ from typing import Tuple
 import torch
 from torch import nn
 
+from sentence_ranker.utils import get_llm_scores
+
 from .replay_buffer import ReplayBuffer
 
 INF = 10e8
@@ -35,7 +37,6 @@ def train_dqn(
         prev_input_ids, prev_attn_masks, input_ids, attn_masks, actions, rewards, dones, _, _ = buffer.sample(
             train_batch_size
         )
-        num_candidates = prev_input_ids.shape[1]
 
         # Move batch to device if applicable
         prev_input_ids = prev_input_ids.to(device=device)
@@ -49,17 +50,15 @@ def train_dqn(
         # Train q network
         with torch.no_grad():
             q_net.to(device)
-            next_actions = q_net.forward(input_ids.flatten(0, 1), attn_masks.flatten(0, 1)).logits.reshape(train_batch_size, num_candidates).argmax(1).squeeze(0)
+            next_actions = get_llm_scores(q_net, input_ids, attn_masks).argmax(1) # Shape: (batch_size)
             q_net.cpu()
 
             q_net_target.to(device)
-            q_target = rewards.unsqueeze(1) + discount * q_net_target.forward(
-                input_ids.flatten(0, 1), attn_masks.flatten(0, 1)
-            ).logits.reshape(train_batch_size, num_candidates).detach().gather(1, next_actions.unsqueeze(1)) * (1.0 - dones.unsqueeze(1))
+            q_target = rewards.unsqueeze(1) + discount * get_llm_scores(q_net_target, input_ids, attn_masks).detach().gather(1, next_actions.unsqueeze(1)) * (1.0 - dones.unsqueeze(1))
             q_net_target.cpu()
         
         q_net.to(device)
-        diff = q_net.forward(prev_input_ids.flatten(0, 1), prev_attn_masks.flatten(0, 1)).logits.reshape(train_batch_size, num_candidates).gather(1, actions) - q_target
+        diff = get_llm_scores(q_net, prev_input_ids, prev_attn_masks).gather(1, actions) - q_target
         q_loss = (diff * diff).mean()
         q_loss.backward()
 

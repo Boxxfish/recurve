@@ -138,9 +138,15 @@ class DSEnvs:
         return self.candidate_input_ids.clone(), self.candidate_attn_masks.clone()
 
     def use_item(self, item_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Sets the dataset item to use for this episode."""
+        """Sets the dataset item to use for this episode, for generators."""
         self._reset_env(0, item_idx)
         return self.input_ids.clone(), self.attn_masks.clone()
+    
+    def use_item_ranker(self, item_idx: int, lm: LlamaForCausalLM) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Sets the dataset item to use for this episode, for rankers."""
+        self._reset_env(0, item_idx)
+        self._gen_candidates(0, lm)
+        return self.candidate_input_ids.clone(), self.candidate_attn_masks.clone()
 
     def get_current_texts(self) -> List[str]:
         """Returns the text in each environment."""
