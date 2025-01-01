@@ -23,9 +23,8 @@ class EvalResults(BaseModel):
     results: List[EvalResult]
     avg_score: float
 
-def run_eval(args: BaseModel, dataset: Dataset, tokenizer: AutoTokenizer, max_seq_len: int, runs_per_item: int, p_net: nn.Module, device: torch.device) -> EvalResults:
-    done_fn, score_fn = dataset.get_done_score_fns()
-    envs = DSEnvs(dataset, tokenizer, 1, max_seq_len, done_fn, score_fn)
+def run_eval(args: BaseModel, dataset: Dataset, tokenizer: AutoTokenizer, max_seq_len: int, runs_per_item: int, p_net: nn.Module, device: torch.device, ranker_candidates: int) -> EvalResults:
+    envs = DSEnvs(dataset, tokenizer, 1, max_seq_len, ranker_candidates)
     results = []
     avg_score_all = 0.0
     for item_idx in tqdm(range(len(dataset.items))):

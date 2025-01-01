@@ -13,21 +13,22 @@ class ReplayBuffer:
 
     def __init__(
         self,
-        state_shape: torch.Size,
-        action_masks_shape: torch.Size,
+        max_seq_len: int,
+        num_candidates: int,
         capacity: int,
     ):
         k = torch.float
-        state_shape = torch.Size([capacity] + list(state_shape))
-        action_shape = torch.Size([capacity])
-        action_masks_shape = torch.Size([capacity] + list(action_masks_shape))
+        input_ids_shape = torch.Size([capacity, num_candidates, max_seq_len])
+        attn_mask_shape = torch.Size([capacity, num_candidates, max_seq_len])
+        action_shape = torch.Size([capacity, 1])
+        action_masks_shape = torch.Size([capacity, num_candidates])
         self.capacity = capacity
         self.next = 0
         d = torch.device("cpu")
-        self.states = torch.zeros(state_shape, dtype=k, device=d, requires_grad=False)
-        self.next_states = torch.zeros(
-            state_shape, dtype=k, device=d, requires_grad=False
-        )
+        self.input_ids = torch.zeros(input_ids_shape, dtype=torch.int, device=d, requires_grad=False)
+        self.attn_masks = torch.zeros(attn_mask_shape, dtype=torch.bool, device=d, requires_grad=False)
+        self.next_input_ids = torch.zeros(input_ids_shape, dtype=torch.int, device=d, requires_grad=False)
+        self.next_attn_masks = torch.zeros(attn_mask_shape, dtype=torch.bool, device=d, requires_grad=False)
         self.actions = torch.zeros(
             action_shape, dtype=torch.int64, device=d, requires_grad=False
         )
@@ -44,8 +45,10 @@ class ReplayBuffer:
 
     def insert_step(
         self,
-        states: torch.Tensor,
-        next_states: torch.Tensor,
+        input_ids: torch.Tensor,
+        attn_masks: torch.Tensor,
+        next_input_ids: torch.Tensor,
+        next_attn_masks: torch.Tensor,
         actions: torch.Tensor,
         rewards: List[float],
         dones: List[bool],
@@ -63,8 +66,10 @@ class ReplayBuffer:
                 self.next,
                 (self.next + batch_size),
             ).remainder(self.capacity)
-            self.states.index_copy_(0, indices, states)
-            self.next_states.index_copy_(0, indices, next_states)
+            self.input_ids.index_copy_(0, indices, input_ids)
+            self.attn_masks.index_copy_(0, indices, attn_masks)
+            self.next_input_ids.index_copy_(0, indices, next_input_ids)
+            self.next_attn_masks.index_copy_(0, indices, next_attn_masks)
             self.actions.index_copy_(0, indices, actions)
             self.rewards.index_copy_(
                 0, indices, torch.tensor(rewards, dtype=torch.float, device=d)
@@ -90,6 +95,8 @@ class ReplayBuffer:
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
     ]:
         """
         Generates minibatches of experience.
@@ -100,16 +107,20 @@ class ReplayBuffer:
                 [batch_size],
                 dtype=torch.int,
             )
-            rand_states = self.states.index_select(0, indices)
-            rand_next_states = self.next_states.index_select(0, indices)
+            rand_input_ids = self.input_ids.index_select(0, indices)
+            rand_attn_masks = self.attn_masks.index_select(0, indices)
+            rand_next_input_ids = self.next_input_ids.index_select(0, indices)
+            rand_next_attn_masks = self.next_attn_masks.index_select(0, indices)
             rand_actions = self.actions.index_select(0, indices)
             rand_rewards = self.rewards.index_select(0, indices)
             rand_dones = self.dones.index_select(0, indices)
             rand_masks = self.masks.index_select(0, indices)
             rand_next_masks = self.next_masks.index_select(0, indices)
             return (
-                rand_states,
-                rand_next_states,
+                rand_input_ids,
+                rand_attn_masks,
+                rand_next_input_ids,
+                rand_next_attn_masks,
                 rand_actions,
                 rand_rewards,
                 rand_dones,

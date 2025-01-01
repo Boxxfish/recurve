@@ -53,7 +53,7 @@ def main():
     with open(args.dataset, "r") as f:
         data = load(f, Loader=Loader)
         dataset = Dataset.model_validate(data)
-    eval_results = run_eval(args, dataset, tokenizer, exp_meta.args.max_seq_len, args.runs_per_item, p_net, device)
+    eval_results = run_eval(args, dataset, tokenizer, exp_meta.args.max_seq_len, args.runs_per_item, p_net, device, exp_meta.args.ranker_candidates)
 
     with open(args.out, "w") as f:
         f.write(eval_results.model_dump_json(indent=2))

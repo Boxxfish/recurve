@@ -14,3 +14,6 @@ done_fn: |
       return False
     out_ans = output.split("best programming language")[-1]
     return "." in out_ans
+split_fn: |
+  def split_fn(output: str):
+    return "\n" in output
