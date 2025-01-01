@@ -59,6 +59,7 @@ class DSEnvs:
         self.attn_masks = torch.zeros([num_envs, max_seq_len], dtype=torch.bool)
         self.candidate_input_ids = torch.zeros([num_envs, num_candidates, max_seq_len], dtype=torch.int)
         self.candidate_attn_masks = torch.zeros([num_envs, num_candidates, max_seq_len], dtype=torch.bool)
+        self.candidate_texts = [[None] * num_candidates for _ in range(num_envs)]
         self.num_candidates = num_candidates
         self.nexts = torch.zeros([num_envs], dtype=torch.int)
         self.done_fn, self.score_fn = ds.get_done_score_fns()
@@ -95,7 +96,7 @@ class DSEnvs:
         states = (self.input_ids.clone(), self.attn_masks.clone())
         return (states, rewards, dones, truncs, {})
 
-    def step_ranker(self, actions: Tensor, lm: LlamaForCausalLM) -> Tuple[Tuple[Tensor, Tensor], List[float], List[bool], List[bool], dict]:
+    def step_ranker(self, actions: Tensor, lm: LlamaForCausalLM, reset: bool = True) -> Tuple[Tuple[Tensor, Tensor], List[float], List[bool], List[bool], dict]:
         """Steps through the environment, for rankers."""
         self.input_ids = self.candidate_input_ids[torch.arange(0, self.num_envs), actions.int()]
         self.attn_masks = self.candidate_attn_masks[torch.arange(0, self.num_envs), actions.int()]
@@ -118,7 +119,7 @@ class DSEnvs:
         ]
         truncs = [next == self.max_seq_len for next in self.nexts]
         for i, (done, trunc) in enumerate(zip(dones, truncs)):
-            if done or trunc:
+            if (done or trunc) and reset:
                 self._reset_env(i)
             self._gen_candidates(i, lm)
         states = (self.candidate_input_ids.clone(), self.candidate_attn_masks.clone())
@@ -186,8 +187,8 @@ class DSEnvs:
         """Generates action candidates for the ranker."""
         device = lm.device
         for j in range(self.num_candidates):
-            new_input_ids = self.input_ids[i]
-            new_attn_masks = self.attn_masks[i]
+            new_input_ids = self.input_ids[i].clone()
+            new_attn_masks = self.attn_masks[i].clone()
             new_next = self.nexts[i].item()
             start_idx = new_next
             while True:
@@ -199,7 +200,7 @@ class DSEnvs:
                 text = self.tokenizer.decode(new_input_ids[start_idx:new_next])
                 if self.split_fn(text) or self.done_fn(all_text):
                     break
-            self.nexts[i] = new_next
+            self.candidate_texts[i][j] = text
             self.candidate_input_ids[i, j, :] = new_input_ids
             self.candidate_attn_masks[i, j, :] = new_attn_masks
 
