@@ -67,7 +67,7 @@ def train_dqn(
             q_opt.step()
             q_opt.zero_grad()
         
-        total_q_loss += q_loss.item()
+        total_q_loss += q_loss.item() / train_iters
         q_net.cpu()
 
     q_net.eval()

@@ -128,9 +128,6 @@ class DSEnvs:
         """Resets the environment, for generators."""
         for i in range(self.num_envs):
             self._reset_env(i)
-        self.ds_idxs = [
-            random.randrange(0, len(self.ds.items)) for _ in range(self.num_envs)
-        ]
         return self.input_ids, self.attn_masks
     
     def reset_ranker(self, lm: LlamaForCausalLM) -> Tuple[Tensor, Tensor]:
@@ -138,9 +135,6 @@ class DSEnvs:
         for i in range(self.num_envs):
             self._reset_env(i)
             self._gen_candidates(i, lm)
-        self.ds_idxs = [
-            random.randrange(0, len(self.ds.items)) for _ in range(self.num_envs)
-        ]
         return self.candidate_input_ids.clone(), self.candidate_attn_masks.clone()
 
     def use_item(self, item_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:

@@ -21,11 +21,11 @@ from sentence_ranker.utils import create_directory, get_llm_logits, parse_args
 
 class Args(BaseModel):
     exp_base_dir: str = "./runs"
-    iterations: int = 1_000
+    iterations: int = 100_000
     device: str = "cuda"
     dataset: str
     save_every: int = 10
-    eval_every: int = 1
+    eval_every: int = 10
     num_eval_runs: int = 10
 
     # Ranker settings
@@ -33,7 +33,7 @@ class Args(BaseModel):
     ranker_candidates: int = 10 # Number of candidate sentences to generate on each timestep
     ranker_train_loop_iters: int = 10 # Number of times to run the ranker training loop per iteration
     ranker_buffer_size: int = 10_000  # Number of elements that can be stored in the buffer
-    ranker_target_update: int = 500  # Number of iterations before updating Q target
+    ranker_target_update: int = 50  # Number of iterations before updating Q target
     ranker_q_epsilon: float = 1.0 # Epsilon for epsilon greedy strategy. This gets annealed over time.
     ranker_train_iters: int = 64 # Number of training iterations per ranker training iteration
     ranker_q_lr: float = 0.001
