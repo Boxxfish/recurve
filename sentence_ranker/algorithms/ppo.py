@@ -71,7 +71,7 @@ def train_ppo(
                 old_act_log_probs = Categorical(logits=logits).log_prob(
                     actions.squeeze()
                 )
-            new_logits = get_llm_logits(p_net, prev_input_ids, prev_attn_masks)
+            new_logits, _ = get_llm_logits(p_net, prev_input_ids, prev_attn_masks)
             new_act_distr = Categorical(logits=new_logits)
             new_act_log_probs = new_act_distr.log_prob(actions.squeeze())
             

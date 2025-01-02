@@ -258,7 +258,7 @@ def main():
                     print("Collecting generator transitions...")
                     gen_trainer.p_net.to(device)
                     for _ in tqdm(range(args.gen_num_steps), position=1):
-                        logits = get_llm_logits(gen_trainer.p_net, input_ids.to(device=device), attn_masks.to(device=device))
+                        logits, _ = get_llm_logits(gen_trainer.p_net, input_ids.to(device=device), attn_masks.to(device=device))
                         actions = Categorical(logits=logits).sample().to(device="cpu")
                         (input_ids_, attn_masks_), rewards, dones, truncs, _ = gen_trainer.envs.step(actions)
                         gen_trainer.buffer.insert_step(
@@ -279,7 +279,7 @@ def main():
                     for buffer_idx in tqdm(range(args.gen_num_steps), position=1):
                         input_ids = gen_trainer.buffer.input_ids[buffer_idx]
                         attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
-                        logits = get_llm_logits(gen_trainer.sft_net, input_ids.to(device=device), attn_masks.to(device=device))
+                        logits, _ = get_llm_logits(gen_trainer.sft_net, input_ids.to(device=device), attn_masks.to(device=device))
                         gen_trainer.buffer.sft_action_probs[buffer_idx].copy_(logits)
 
                     gen_trainer.sft_net.cpu()

@@ -3,7 +3,7 @@ from typing import *
 from pydantic import BaseModel
 import torch
 from torch import Tensor
-from transformers import PreTrainedTokenizer, LlamaForCausalLM
+from transformers import PreTrainedTokenizer, LlamaForCausalLM, DynamicCache
 from torch.distributions import Categorical
 
 from sentence_ranker.utils import get_llm_logits # type: ignore
@@ -190,15 +190,21 @@ class DSEnvs:
             new_input_ids = self.input_ids[i].clone()
             new_attn_masks = self.attn_masks[i].clone()
             new_next = self.nexts[i].item()
+            next_input_ids = new_input_ids
+            next_attn_masks = new_attn_masks
             start_idx = new_next
+            cache = DynamicCache()
             while True:
-                input_id = Categorical(logits=get_llm_logits(lm, new_input_ids.unsqueeze(0).to(device), new_attn_masks.unsqueeze(0).to(device))).sample().squeeze().cpu().item()
+                logits, cache = get_llm_logits(lm, next_input_ids.unsqueeze(0).to(device), next_attn_masks.unsqueeze(0).to(device), cache)
+                input_id = Categorical(logits=logits).sample().squeeze().cpu().item()
                 new_input_ids[new_next] = input_id
                 new_attn_masks[new_next] = True
                 new_next += 1
+                next_input_ids = new_input_ids[new_next - 1:]
+                next_attn_masks = new_attn_masks[new_next - 1:]
                 all_text = self.tokenizer.decode(new_input_ids[:new_next])
                 text = self.tokenizer.decode(new_input_ids[start_idx:new_next])
-                if self.split_fn(text) or self.done_fn(all_text):
+                if self.split_fn(text) or self.done_fn(all_text) or new_next >= self.max_seq_len:
                     break
             self.candidate_texts[i][j] = text
             self.candidate_input_ids[i, j, :] = new_input_ids

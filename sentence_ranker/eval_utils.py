@@ -8,7 +8,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from sentence_ranker.datasets import DSEnvs, Dataset
-from sentence_ranker.utils import get_llm_logits, get_llm_scores
+from sentence_ranker.utils import get_llm_scores
 
 class EvalResultOutput(BaseModel):
     text: str
