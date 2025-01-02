@@ -8,7 +8,7 @@ from transformers.models.llama import LlamaConfig, LlamaForSequenceClassificatio
 from torch.distributions import Categorical
 from yaml import load, Loader # type: ignore
 import wandb
-from peft import LoraConfig, LoraModel
+from peft import LoraConfig
 
 from sentence_ranker.algorithms.dqn import train_dqn
 from sentence_ranker.algorithms.ppo import train_ppo
@@ -36,7 +36,7 @@ class Args(BaseModel):
     ranker_target_update: int = 50  # Number of iterations before updating Q target
     ranker_q_epsilon: float = 1.0 # Epsilon for epsilon greedy strategy. This gets annealed over time.
     ranker_train_iters: int = 64 # Number of training iterations per ranker training iteration
-    ranker_q_lr: float = 0.001
+    ranker_q_lr: float = 0.0001
     ranker_train_batch_size: int = 1 # Batch size for DQN
     ranker_grad_steps: int = 32 # Number of gradient steps to take during DQN
 
@@ -49,16 +49,17 @@ class Args(BaseModel):
     gen_num_envs: int = 2  # Number of parallel generations during sampling
     gen_num_steps: int = 512  # How many steps to take during sampling
     gen_train_mode: Literal["frozen", "sentence", "full"] = "frozen"
-    gen_train_loop_iters: int = 10 # Number of times to run the generator training loop per iteration
+    gen_train_loop_iters: int = 3 # Number of times to run the generator training loop per iteration
     gen_train_iters: int = 2 # Number of training iterations per generator training iteration
     gen_train_batch_size: int = 8 # Batch size for PPO
     gen_lambda: float = 0.95 # Lambda for GAE
     gen_epsilon: float = 0.2  # Probability ratio cutoff for PPO
-    gen_p_lr: float = 0.0001
-    gen_v_lr: float = 0.001
+    gen_p_lr: float = 0.00001
+    gen_v_lr: float = 0.0001
     gen_grad_steps: int = 1 # Number of gradient steps to take during PPO
     gen_entropy_coeff: float = 0.0 # Entropy coefficient for PPO
     gen_sft_coeff: float = 0.1 # SFT coefficient for PPO (Prevents logit collapse)
+    gen_train_after: int = 10 # Number of steps to wait until generator training starts
 
 
 class ExpMeta(BaseModel):
@@ -145,6 +146,8 @@ def main():
     # Set up experiment
     exp_meta = ExpMeta(args=args)
     chkpt_dir = create_directory(args.exp_base_dir, exp_meta)
+    eval_dir = chkpt_dir.parent / "evals"
+    eval_dir.mkdir(exist_ok=True)
 
     # Load dataset
     with open(args.dataset, "r") as f:
@@ -155,7 +158,33 @@ def main():
     ranker_trainer = RankerTrainer(args, dataset)
     gen_trainer = GeneratorTrainer(args, dataset)
 
+    # Fill replay buffer with experience
     device = torch.device(args.device)
+    gen_trainer.p_net.to(device)
+    with torch.no_grad():
+        input_ids, attn_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        print("Filling replay buffer:")
+        with tqdm(total=ranker_trainer.buffer.capacity) as pbar:
+            while not ranker_trainer.buffer.filled:
+                action = random.randrange(0, args.ranker_candidates)
+                actions = torch.tensor([action])
+                (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
+                ranker_trainer.buffer.insert_step(
+                    input_ids,
+                    attn_masks,
+                    next_input_ids,
+                    next_attn_masks,
+                    actions.unsqueeze(-1),
+                    rewards,
+                    dones,
+                    None,
+                    None,
+                )
+                input_ids = next_input_ids
+                attn_masks = next_attn_masks
+                pbar.update(1)
+    gen_trainer.p_net.cpu()
+
     for train_step in tqdm(range(args.iterations), position=0):
         ####
         ## Ranker
@@ -199,19 +228,18 @@ def main():
                     if dones[0] or truncs[0]:
                         break
 
-            if ranker_trainer.buffer.filled:
-                total_q_loss = train_dqn(
-                    ranker_trainer.q_net,
-                    ranker_trainer.target_q_net,
-                    ranker_trainer.q_opt,
-                    ranker_trainer.buffer,
-                    device,
-                    args.ranker_train_iters,
-                    args.ranker_train_batch_size,
-                    1.0,
-                    args.ranker_grad_steps
-                )
-                avg_q_loss += total_q_loss
+            total_q_loss = train_dqn(
+                ranker_trainer.q_net,
+                ranker_trainer.target_q_net,
+                ranker_trainer.q_opt,
+                ranker_trainer.buffer,
+                device,
+                args.ranker_train_iters,
+                args.ranker_train_batch_size,
+                1.0,
+                args.ranker_grad_steps
+            )
+            avg_q_loss += total_q_loss
 
         # Update Q target
         if train_step % args.ranker_target_update == 0:
@@ -221,7 +249,7 @@ def main():
         ## Generator
         ####
         avg_p_loss, avg_v_loss = 0.0, 0.0
-        if args.gen_train_mode != "frozen":
+        if args.gen_train_mode != "frozen" and train_step > args.gen_train_after:
             input_ids, attn_masks = gen_trainer.envs.reset()
             for _ in range(args.gen_train_loop_iters):
                 # Sample with generator policy
@@ -290,12 +318,13 @@ def main():
 
         # Run eval
         if train_step % args.eval_every == 0:
-            gen_trainer.p_net.to(device)
             eval_results = run_eval({}, dataset, gen_trainer.tokenizer, args.max_seq_len, args.num_eval_runs, gen_trainer.p_net, device, args.ranker_candidates, ranker_trainer.q_net)
             log_dict.update({
                 "eval_score": eval_results.avg_score
             })
-            gen_trainer.p_net.cpu()
+            for label in [str(train_step), "latest"]:
+                with open(eval_dir / f"eval-{label}.json", "w") as f:
+                    f.write(eval_results.model_dump_json(indent=2))
 
         wandb.log(log_dict)
 

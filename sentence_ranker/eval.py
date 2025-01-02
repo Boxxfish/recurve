@@ -34,6 +34,7 @@ class EvalResults(BaseModel):
     results: List[EvalResult]
     avg_score: float
 
+@torch.no_grad()
 def main():
     args = parse_args(Args)
     exp_dir = Path(args.exp_path)

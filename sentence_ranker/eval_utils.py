@@ -25,6 +25,7 @@ class EvalResults(BaseModel):
     results: List[EvalResult]
     avg_score: float
 
+@torch.no_grad()
 def run_eval(args: BaseModel, dataset: Dataset, tokenizer: AutoTokenizer, max_seq_len: int, runs_per_item: int, p_net: nn.Module, device: torch.device, ranker_candidates: int, q_net: Optional[nn.Module]) -> EvalResults:
     envs = DSEnvs(dataset, tokenizer, 1, max_seq_len, ranker_candidates)
     results = []
