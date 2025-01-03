@@ -3,8 +3,8 @@ import os
 from pathlib import Path
 from typing import Literal, Optional, Tuple, TypeVar, Union, get_args, get_origin
 from transformers.modeling_outputs import CausalLMOutputWithPast  # type: ignore
-from transformers.models.llama import LlamaForCausalLM  # type: ignore
-from transformers import Cache
+from transformers.models.llama import LlamaForCausalLM, LlamaForSequenceClassification # type: ignore
+from transformers import Cache, DynamicCache
 
 from pydantic import BaseModel
 import torch
@@ -83,16 +83,50 @@ def get_llm_logits(
 
 
 def get_llm_scores(
-    q_net: LlamaForCausalLM, input_ids: torch.Tensor, attn_masks: torch.Tensor
+    q_net: LlamaForSequenceClassification,
+    input_ids: torch.Tensor,
+    attn_masks: torch.Tensor,
 ) -> torch.Tensor:
     """Given `input_ids` and `attn_masks` of shape (batch_size, num_candidates, max_seq_len), returns a set of scores of shape (batch_size, num_candidates)."""
     batch_size, num_candidates, _ = input_ids.shape
-    input_lens = attn_masks.flatten(0, 1).byte().argmin(1) - 1
-    max_len = input_lens.amax().item() + 1
-    q_vals = q_net.forward(
-        input_ids.flatten(0, 1)[:, :max_len], attn_masks.flatten(0, 1)[:, :max_len]
-    ).logits.reshape(batch_size, num_candidates)
-    return q_vals
+    assert num_candidates > 1, "Must supply multiple candidates per batch row"
+    input_lens = attn_masks.byte().argmin(-1) - 1
+
+    q_vals = []
+    for single_input_ids, single_attn_masks, single_input_lens in zip(
+        input_ids, attn_masks, input_lens
+    ):
+        # Compute cached states for candidate prefixes
+        prefix_idx = (
+            torch.logical_and(single_input_ids[0], single_input_ids[1])
+            .byte()
+            .argmin()
+            .item()
+            - 1
+        )
+        cache = DynamicCache()
+        lm_output = q_net.forward(
+            single_input_ids[:1, :prefix_idx],
+            single_attn_masks[:1, :prefix_idx],
+            past_key_values=cache,
+            use_cache=True,
+        )
+        cache: DynamicCache = lm_output.past_key_values
+
+        # Repeat cache for each candidate
+        for i in range(len(cache.key_cache)):
+            cache.key_cache[i] = torch.cat([cache.key_cache[i]] * num_candidates, dim=0)
+            cache.value_cache[i] = torch.cat([cache.value_cache[i]] * num_candidates, dim=0)
+
+        # Run inference over all candidates
+        max_len = single_input_lens.amax().item() + 1
+        single_q_vals = q_net.forward(
+            single_input_ids[:, prefix_idx : max_len],
+            single_attn_masks[:,  : max_len],
+            past_key_values=cache,
+        ).logits.squeeze(-1)  # Shape: (num_candidates)
+        q_vals.append(single_q_vals)
+    return torch.stack(q_vals, 0)
 
 
 def copy_params(src: nn.Module, dest: nn.Module):
