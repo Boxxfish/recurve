@@ -103,8 +103,8 @@ class DSEnvs:
         self.nexts = self.attn_masks.int().argmin(1)
         texts = self.get_current_texts()
         dones = [
-            self.done_fn(text)
-            for text in texts
+            self.done_fn(text) or next >= self.max_seq_len - 4
+            for text, next in zip(texts, self.nexts)
         ]
         rewards = [
             (
@@ -204,7 +204,7 @@ class DSEnvs:
                 next_attn_masks = new_attn_masks[new_next - 1:]
                 all_text = self.tokenizer.decode(new_input_ids[:new_next])
                 text = self.tokenizer.decode(new_input_ids[start_idx:new_next])
-                if self.split_fn(text) or self.done_fn(all_text) or new_next >= self.max_seq_len:
+                if self.split_fn(text) or self.done_fn(all_text) or new_next >= self.max_seq_len - 1:
                     break
             self.candidate_texts[i][j] = text
             self.candidate_input_ids[i, j, :] = new_input_ids
