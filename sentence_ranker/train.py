@@ -38,9 +38,6 @@ class Args(BaseModel):
     ranker_candidates: int = (
         10  # Number of candidate sentences to generate on each timestep
     )
-    ranker_train_loop_iters: int = (
-        10  # Number of times to run the ranker training loop per iteration
-    )
     ranker_buffer_size: int = (
         10_000  # Number of elements that can be stored in the buffer
     )
@@ -67,9 +64,6 @@ class Args(BaseModel):
     gen_num_envs: int = 2  # Number of parallel generations during sampling
     gen_num_steps: int = 512  # How many steps to take during sampling
     gen_train_mode: Literal["frozen", "sentence", "full"] = "frozen"
-    gen_train_loop_iters: int = (
-        3  # Number of times to run the generator training loop per iteration
-    )
     gen_train_iters: int = (
         2  # Number of training iterations per generator training iteration
     )
@@ -218,68 +212,72 @@ def main():
 
     for train_step in tqdm(range(args.iterations), position=0):
         ####
-        ## Ranker
+        ## Collect experience
         ####
         percent_done = train_step / args.iterations
+        gen_trainer.p_net.to(device)
+        input_ids, attn_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        gen_trainer.p_net.cpu()
+        step_idxs = []
+        with torch.no_grad():
+            while True:
+                if random.random() < args.ranker_q_epsilon * max(
+                    1.0 - percent_done, 0.05
+                ):
+                    action = random.randrange(0, args.ranker_candidates)
+                else:
+                    ranker_trainer.q_net.to(device)
+                    q_vals = get_llm_scores(
+                        ranker_trainer.q_net,
+                        input_ids.to(device),
+                        attn_masks.to(device),
+                        args.ranker_use_sigmoid,
+                    ).squeeze(
+                        0
+                    )  # Shape: (num_candidates)
+                    ranker_trainer.q_net.cpu()
+                    action = q_vals.argmax(0).cpu().item()
+                actions = torch.tensor([action])
+                gen_trainer.p_net.to(device)
+                (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = (
+                    ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
+                )
+                gen_trainer.p_net.cpu()
+                step_idxs.append(ranker_trainer.buffer.next)
+                ranker_trainer.buffer.insert_step(
+                    input_ids,
+                    attn_masks,
+                    next_input_ids,
+                    next_attn_masks,
+                    actions.unsqueeze(-1),
+                    rewards,
+                    dones,
+                    None,
+                    None,
+                )
+                input_ids = next_input_ids
+                attn_masks = next_attn_masks
+
+                if dones[0] or truncs[0]:
+                    break
+        
+        ####
+        ## Ranker
+        ####
+        # Train network
         avg_q_loss = 0.0
-        for _ in range(args.ranker_train_loop_iters):
-            # Collect experience
-            gen_trainer.p_net.to(device)
-            input_ids, attn_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
-            gen_trainer.p_net.cpu()
-            with torch.no_grad():
-                while True:
-                    if random.random() < args.ranker_q_epsilon * max(
-                        1.0 - percent_done, 0.05
-                    ):
-                        action = random.randrange(0, args.ranker_candidates)
-                    else:
-                        ranker_trainer.q_net.to(device)
-                        q_vals = get_llm_scores(
-                            ranker_trainer.q_net,
-                            input_ids.to(device),
-                            attn_masks.to(device),
-                            args.ranker_use_sigmoid,
-                        ).squeeze(
-                            0
-                        )  # Shape: (num_candidates)
-                        ranker_trainer.q_net.cpu()
-                        action = q_vals.argmax(0).cpu().item()
-                    actions = torch.tensor([action])
-                    gen_trainer.p_net.to(device)
-                    (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = (
-                        ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
-                    )
-                    gen_trainer.p_net.cpu()
-                    ranker_trainer.buffer.insert_step(
-                        input_ids,
-                        attn_masks,
-                        next_input_ids,
-                        next_attn_masks,
-                        actions.unsqueeze(-1),
-                        rewards,
-                        dones,
-                        None,
-                        None,
-                    )
-                    input_ids = next_input_ids
-                    attn_masks = next_attn_masks
-
-                    if dones[0] or truncs[0]:
-                        break
-
-            total_q_loss = train_dqn(
-                ranker_trainer.q_net,
-                ranker_trainer.target_q_net,
-                ranker_trainer.q_opt,
-                ranker_trainer.buffer,
-                device,
-                args.ranker_train_iters,
-                args.ranker_train_batch_size,
-                1.0,
-                args.ranker_grad_steps,
-            )
-            avg_q_loss += total_q_loss
+        total_q_loss = train_dqn(
+            ranker_trainer.q_net,
+            ranker_trainer.target_q_net,
+            ranker_trainer.q_opt,
+            ranker_trainer.buffer,
+            device,
+            args.ranker_train_iters,
+            args.ranker_train_batch_size,
+            1.0,
+            args.ranker_grad_steps,
+        )
+        avg_q_loss += total_q_loss
 
         # Update Q target
         if train_step % args.ranker_target_update == 0:
@@ -293,71 +291,73 @@ def main():
         avg_p_loss, avg_v_loss = 0.0, 0.0
         if args.gen_train_mode != "frozen" and train_step > args.gen_train_after:
             input_ids, attn_masks = gen_trainer.envs.reset()
-            for _ in range(args.gen_train_loop_iters):
-                # Sample with generator policy
-                with torch.no_grad():
-                    # Step through env with generator policy and collect transitions
-                    print("Collecting generator transitions...")
-                    gen_trainer.p_net.to(device)
-                    for _ in tqdm(range(args.gen_num_steps), position=1):
-                        logits, _ = get_llm_logits(
-                            gen_trainer.p_net,
-                            input_ids.to(device=device),
-                            attn_masks.to(device=device),
-                        )
-                        actions = Categorical(logits=logits).sample().to(device="cpu")
-                        (input_ids_, attn_masks_), rewards, dones, truncs, _ = (
-                            gen_trainer.envs.step(actions)
-                        )
-                        gen_trainer.buffer.insert_step(
-                            input_ids,
-                            attn_masks,
-                            actions.unsqueeze(-1),
-                            logits,
-                            rewards,
-                            dones,
-                            truncs,
-                        )
-                        input_ids, attn_masks = input_ids_, attn_masks_
-                    gen_trainer.buffer.insert_final_step(input_ids, attn_masks)
-                    gen_trainer.p_net.cpu()
+            # Sample with generator policy
+            with torch.no_grad():
+                # Step through env with generator policy and collect transitions
+                print("Collecting generator transitions...")
+                gen_trainer.p_net.to(device)
+                for _ in tqdm(range(args.gen_num_steps), position=1):
+                    logits, _ = get_llm_logits(
+                        gen_trainer.p_net,
+                        input_ids.to(device=device),
+                        attn_masks.to(device=device),
+                    )
+                    actions = Categorical(logits=logits).sample().to(device="cpu")
+                    (input_ids_, attn_masks_), rewards, dones, truncs, _ = (
+                        gen_trainer.envs.step(actions)
+                    )
+                    gen_trainer.buffer.insert_step(
+                        input_ids,
+                        attn_masks,
+                        actions.unsqueeze(-1),
+                        logits,
+                        rewards,
+                        dones,
+                        truncs,
+                    )
+                    input_ids, attn_masks = input_ids_, attn_masks_
+                gen_trainer.buffer.insert_final_step(input_ids, attn_masks)
+                gen_trainer.p_net.cpu()
 
-                    # Run SFT model over transitions and collect logits
-                    print("Collecting SFT logits...")
-                    gen_trainer.sft_net.to(device)
-                    for buffer_idx in tqdm(range(args.gen_num_steps), position=1):
-                        input_ids = gen_trainer.buffer.input_ids[buffer_idx]
-                        attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
-                        logits, _ = get_llm_logits(
-                            gen_trainer.sft_net,
-                            input_ids.to(device=device),
-                            attn_masks.to(device=device),
-                        )
-                        gen_trainer.buffer.sft_action_probs[buffer_idx].copy_(logits)
+                # Run SFT model over transitions and collect logits
+                print("Collecting SFT logits...")
+                gen_trainer.sft_net.to(device)
+                for buffer_idx in tqdm(range(args.gen_num_steps), position=1):
+                    input_ids = gen_trainer.buffer.input_ids[buffer_idx]
+                    attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
+                    logits, _ = get_llm_logits(
+                        gen_trainer.sft_net,
+                        input_ids.to(device=device),
+                        attn_masks.to(device=device),
+                    )
+                    gen_trainer.buffer.sft_action_probs[buffer_idx].copy_(logits)
 
-                    gen_trainer.sft_net.cpu()
+                gen_trainer.sft_net.cpu()
 
-                # Train generator
-                total_p_loss, total_v_loss = train_ppo(
-                    gen_trainer.p_net,
-                    gen_trainer.v_net,
-                    gen_trainer.p_opt,
-                    gen_trainer.v_opt,
-                    gen_trainer.buffer,
-                    device,
-                    args.gen_train_iters,
-                    args.gen_train_batch_size,
-                    1.0,
-                    args.gen_lambda,
-                    args.gen_epsilon,
-                    args.gen_sft_coeff,
-                    gradient_steps=args.gen_grad_steps,
-                    entropy_coeff=args.gen_entropy_coeff,
-                )
-                gen_trainer.buffer.clear()
-                avg_p_loss += total_p_loss
-                avg_v_loss += total_v_loss
+            # Train generator
+            total_p_loss, total_v_loss = train_ppo(
+                gen_trainer.p_net,
+                gen_trainer.v_net,
+                gen_trainer.p_opt,
+                gen_trainer.v_opt,
+                gen_trainer.buffer,
+                device,
+                args.gen_train_iters,
+                args.gen_train_batch_size,
+                1.0,
+                args.gen_lambda,
+                args.gen_epsilon,
+                args.gen_sft_coeff,
+                gradient_steps=args.gen_grad_steps,
+                entropy_coeff=args.gen_entropy_coeff,
+            )
+            gen_trainer.buffer.clear()
+            avg_p_loss += total_p_loss
+            avg_v_loss += total_v_loss
 
+        ####
+        ## Metrics, evaluation, and saving
+        ####
         # Log metrics
         avg_q_loss = avg_q_loss / args.ranker_train_loop_iters
         avg_p_loss = avg_p_loss / args.gen_train_loop_iters
