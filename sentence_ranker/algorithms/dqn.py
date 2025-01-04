@@ -20,6 +20,7 @@ def train_dqn(
     train_batch_size: int,
     discount: float,
     gradient_steps: int,
+    use_sigmoid: bool
 ) -> float:
     """
     Performs the DQN training loop.
@@ -50,15 +51,15 @@ def train_dqn(
         # Train q network
         with torch.no_grad():
             q_net.to(device)
-            next_actions = get_llm_scores(q_net, input_ids, attn_masks).argmax(1) # Shape: (batch_size)
+            next_actions = get_llm_scores(q_net, input_ids, attn_masks, use_sigmoid).argmax(1) # Shape: (batch_size)
             q_net.cpu()
 
             q_net_target.to(device)
-            q_target = rewards.unsqueeze(1) + discount * get_llm_scores(q_net_target, input_ids, attn_masks).detach().gather(1, next_actions.unsqueeze(1)) * (1.0 - dones.unsqueeze(1))
+            q_target = rewards.unsqueeze(1) + discount * get_llm_scores(q_net_target, input_ids, attn_masks, use_sigmoid).detach().gather(1, next_actions.unsqueeze(1)) * (1.0 - dones.unsqueeze(1))
             q_net_target.cpu()
         
         q_net.to(device)
-        diff = get_llm_scores(q_net, prev_input_ids, prev_attn_masks).gather(1, actions) - q_target
+        diff = get_llm_scores(q_net, prev_input_ids, prev_attn_masks, use_sigmoid).gather(1, actions) - q_target
         q_loss = (diff * diff).mean()
         q_loss.backward()
 

@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 from transformers.models.llama import LlamaConfig, LlamaForSequenceClassification, LlamaForCausalLM, LlamaTokenizerFast  # type: ignore
 from torch.distributions import Categorical
-from yaml import load, Loader # type: ignore
+from yaml import load, Loader  # type: ignore
 import wandb
 from peft import LoraConfig
 
@@ -16,7 +16,12 @@ from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
 from sentence_ranker.algorithms.rollout_buffer import RolloutBuffer
 from sentence_ranker.datasets import DSEnvs, Dataset
 from sentence_ranker.eval_utils import run_eval
-from sentence_ranker.utils import create_directory, get_llm_logits, get_llm_scores, parse_args
+from sentence_ranker.utils import (
+    create_directory,
+    get_llm_logits,
+    get_llm_scores,
+    parse_args,
+)
 
 
 class Args(BaseModel):
@@ -30,15 +35,28 @@ class Args(BaseModel):
 
     # Ranker settings
     ranker_base: str = "meta-llama/Llama-3.2-1B"
-    ranker_candidates: int = 10 # Number of candidate sentences to generate on each timestep
-    ranker_train_loop_iters: int = 10 # Number of times to run the ranker training loop per iteration
-    ranker_buffer_size: int = 10_000  # Number of elements that can be stored in the buffer
+    ranker_candidates: int = (
+        10  # Number of candidate sentences to generate on each timestep
+    )
+    ranker_train_loop_iters: int = (
+        10  # Number of times to run the ranker training loop per iteration
+    )
+    ranker_buffer_size: int = (
+        10_000  # Number of elements that can be stored in the buffer
+    )
     ranker_target_update: int = 50  # Number of iterations before updating Q target
-    ranker_q_epsilon: float = 1.0 # Epsilon for epsilon greedy strategy. This gets annealed over time.
-    ranker_train_iters: int = 64 # Number of training iterations per ranker training iteration
+    ranker_q_epsilon: float = (
+        1.0  # Epsilon for epsilon greedy strategy. This gets annealed over time.
+    )
+    ranker_train_iters: int = (
+        16  # Number of training iterations per ranker training iteration
+    )
     ranker_q_lr: float = 0.0001
-    ranker_train_batch_size: int = 1 # Batch size for DQN
-    ranker_grad_steps: int = 32 # Number of gradient steps to take during DQN
+    ranker_train_batch_size: int = 4  # Batch size for DQN
+    ranker_grad_steps: int = 16  # Number of gradient steps to take during DQN
+    ranker_use_sigmoid: bool = (
+        False  # Whether Q values should be passed through the sigmoid function (Helps with overestimation)
+    )
 
     # Generator settings
     generator_base: str = "meta-llama/Llama-3.2-1B-Instruct"
@@ -49,17 +67,21 @@ class Args(BaseModel):
     gen_num_envs: int = 2  # Number of parallel generations during sampling
     gen_num_steps: int = 512  # How many steps to take during sampling
     gen_train_mode: Literal["frozen", "sentence", "full"] = "frozen"
-    gen_train_loop_iters: int = 3 # Number of times to run the generator training loop per iteration
-    gen_train_iters: int = 2 # Number of training iterations per generator training iteration
-    gen_train_batch_size: int = 8 # Batch size for PPO
-    gen_lambda: float = 0.95 # Lambda for GAE
+    gen_train_loop_iters: int = (
+        3  # Number of times to run the generator training loop per iteration
+    )
+    gen_train_iters: int = (
+        2  # Number of training iterations per generator training iteration
+    )
+    gen_train_batch_size: int = 8  # Batch size for PPO
+    gen_lambda: float = 0.95  # Lambda for GAE
     gen_epsilon: float = 0.2  # Probability ratio cutoff for PPO
     gen_p_lr: float = 0.00001
     gen_v_lr: float = 0.0001
-    gen_grad_steps: int = 1 # Number of gradient steps to take during PPO
-    gen_entropy_coeff: float = 0.0 # Entropy coefficient for PPO
-    gen_sft_coeff: float = 0.1 # SFT coefficient for PPO (Prevents logit collapse)
-    gen_train_after: int = 10 # Number of steps to wait until generator training starts
+    gen_grad_steps: int = 1  # Number of gradient steps to take during PPO
+    gen_entropy_coeff: float = 0.0  # Entropy coefficient for PPO
+    gen_sft_coeff: float = 0.1  # SFT coefficient for PPO (Prevents logit collapse)
+    gen_train_after: int = 10  # Number of steps to wait until generator training starts
 
 
 class ExpMeta(BaseModel):
@@ -79,7 +101,7 @@ class GeneratorTrainer:
         )
         self.p_net = LlamaForCausalLM.from_pretrained(args.generator_base)
         self.p_net.add_adapter(p_net_lora_cfg, "default")
-        
+
         # Value model
         v_net_lora_cfg = LoraConfig(
             task_type="SEQ_CLS",
@@ -90,7 +112,9 @@ class GeneratorTrainer:
         v_net_cfg = copy.deepcopy(self.p_net.config)
         v_net_cfg.num_labels = 1
         v_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
-        self.v_net = LlamaForSequenceClassification.from_pretrained(args.generator_base, config=v_net_cfg)
+        self.v_net = LlamaForSequenceClassification.from_pretrained(
+            args.generator_base, config=v_net_cfg
+        )
         self.v_net.add_adapter(v_net_lora_cfg, "default")
 
         self.sft_net = LlamaForCausalLM.from_pretrained(args.generator_sft)
@@ -104,6 +128,7 @@ class GeneratorTrainer:
             args.gen_num_steps,
         )
         self.envs = DSEnvs(ds, self.tokenizer, args.gen_num_envs, args.max_seq_len, 1)
+
 
 class RankerTrainer:
 
@@ -120,9 +145,11 @@ class RankerTrainer:
         q_net_cfg = copy.deepcopy(LlamaConfig.from_pretrained(args.ranker_base))
         q_net_cfg.num_labels = 1
         q_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
-        self.q_net = LlamaForSequenceClassification.from_pretrained(args.ranker_base, config=q_net_cfg)
+        self.q_net = LlamaForSequenceClassification.from_pretrained(
+            args.ranker_base, config=q_net_cfg
+        )
         self.q_net.add_adapter(q_net_lora_cfg, "default")
-        
+
         self.target_q_net = copy.deepcopy(self.q_net)
 
         self.q_opt = torch.optim.Adam(self.q_net.parameters(), lr=args.ranker_q_lr)
@@ -131,12 +158,14 @@ class RankerTrainer:
             args.ranker_candidates,
             args.ranker_buffer_size,
         )
-        self.envs = DSEnvs(ds, self.tokenizer, 1, args.max_seq_len, args.ranker_candidates)
+        self.envs = DSEnvs(
+            ds, self.tokenizer, 1, args.max_seq_len, args.ranker_candidates
+        )
 
 
 def main():
     args = parse_args(Args)
-    
+
     # Wandb
     wandb.init(
         project="sentence-ranker",
@@ -168,7 +197,9 @@ def main():
             while not ranker_trainer.buffer.filled:
                 action = random.randrange(0, args.ranker_candidates)
                 actions = torch.tensor([action])
-                (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
+                (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = (
+                    ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
+                )
                 ranker_trainer.buffer.insert_step(
                     input_ids,
                     attn_masks,
@@ -198,18 +229,27 @@ def main():
             gen_trainer.p_net.cpu()
             with torch.no_grad():
                 while True:
-                    if (
-                        random.random() < args.ranker_q_epsilon * max(1.0 - percent_done, 0.05)
+                    if random.random() < args.ranker_q_epsilon * max(
+                        1.0 - percent_done, 0.05
                     ):
                         action = random.randrange(0, args.ranker_candidates)
                     else:
                         ranker_trainer.q_net.to(device)
-                        q_vals = get_llm_scores(ranker_trainer.q_net, input_ids.to(device), attn_masks.to(device)).squeeze(0) # Shape: (num_candidates)
+                        q_vals = get_llm_scores(
+                            ranker_trainer.q_net,
+                            input_ids.to(device),
+                            attn_masks.to(device),
+                            args.ranker_use_sigmoid,
+                        ).squeeze(
+                            0
+                        )  # Shape: (num_candidates)
                         ranker_trainer.q_net.cpu()
                         action = q_vals.argmax(0).cpu().item()
                     actions = torch.tensor([action])
                     gen_trainer.p_net.to(device)
-                    (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
+                    (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = (
+                        ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
+                    )
                     gen_trainer.p_net.cpu()
                     ranker_trainer.buffer.insert_step(
                         input_ids,
@@ -237,13 +277,15 @@ def main():
                 args.ranker_train_iters,
                 args.ranker_train_batch_size,
                 1.0,
-                args.ranker_grad_steps
+                args.ranker_grad_steps,
             )
             avg_q_loss += total_q_loss
 
         # Update Q target
         if train_step % args.ranker_target_update == 0:
-            ranker_trainer.target_q_net.load_state_dict(ranker_trainer.q_net.state_dict())
+            ranker_trainer.target_q_net.load_state_dict(
+                ranker_trainer.q_net.state_dict()
+            )
 
         ####
         ## Generator
@@ -258,11 +300,18 @@ def main():
                     print("Collecting generator transitions...")
                     gen_trainer.p_net.to(device)
                     for _ in tqdm(range(args.gen_num_steps), position=1):
-                        logits, _ = get_llm_logits(gen_trainer.p_net, input_ids.to(device=device), attn_masks.to(device=device))
+                        logits, _ = get_llm_logits(
+                            gen_trainer.p_net,
+                            input_ids.to(device=device),
+                            attn_masks.to(device=device),
+                        )
                         actions = Categorical(logits=logits).sample().to(device="cpu")
-                        (input_ids_, attn_masks_), rewards, dones, truncs, _ = gen_trainer.envs.step(actions)
+                        (input_ids_, attn_masks_), rewards, dones, truncs, _ = (
+                            gen_trainer.envs.step(actions)
+                        )
                         gen_trainer.buffer.insert_step(
-                            input_ids, attn_masks,
+                            input_ids,
+                            attn_masks,
                             actions.unsqueeze(-1),
                             logits,
                             rewards,
@@ -279,7 +328,11 @@ def main():
                     for buffer_idx in tqdm(range(args.gen_num_steps), position=1):
                         input_ids = gen_trainer.buffer.input_ids[buffer_idx]
                         attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
-                        logits, _ = get_llm_logits(gen_trainer.sft_net, input_ids.to(device=device), attn_masks.to(device=device))
+                        logits, _ = get_llm_logits(
+                            gen_trainer.sft_net,
+                            input_ids.to(device=device),
+                            attn_masks.to(device=device),
+                        )
                         gen_trainer.buffer.sft_action_probs[buffer_idx].copy_(logits)
 
                     gen_trainer.sft_net.cpu()
@@ -304,7 +357,6 @@ def main():
                 gen_trainer.buffer.clear()
                 avg_p_loss += total_p_loss
                 avg_v_loss += total_v_loss
-            
 
         # Log metrics
         avg_q_loss = avg_q_loss / args.ranker_train_loop_iters
@@ -318,10 +370,19 @@ def main():
 
         # Run eval
         if train_step % args.eval_every == 0:
-            eval_results = run_eval({}, dataset, gen_trainer.tokenizer, args.max_seq_len, args.num_eval_runs, gen_trainer.p_net, device, args.ranker_candidates, ranker_trainer.q_net)
-            log_dict.update({
-                "eval_score": eval_results.avg_score
-            })
+            eval_results = run_eval(
+                {},
+                dataset,
+                gen_trainer.tokenizer,
+                args.max_seq_len,
+                args.num_eval_runs,
+                gen_trainer.p_net,
+                device,
+                args.ranker_candidates,
+                ranker_trainer.q_net,
+                args.ranker_use_sigmoid,
+            )
+            log_dict.update({"eval_score": eval_results.avg_score})
             for label in [str(train_step), "latest"]:
                 with open(eval_dir / f"eval-{label}.json", "w") as f:
                     f.write(eval_results.model_dump_json(indent=2))
@@ -331,9 +392,16 @@ def main():
         # Save artifacts
         if train_step % args.save_every == 0:
             for label in [str(train_step), "latest"]:
-                ranker_trainer.q_net.save_pretrained(str(chkpt_dir / f"ranker_q_net-{label}"), from_pt=True)
-                gen_trainer.p_net.save_pretrained(str(chkpt_dir / f"gen_p_net-{label}"), from_pt=True)
-                gen_trainer.v_net.save_pretrained(str(chkpt_dir / f"gen_v_net-{label}"), from_pt=True)
+                ranker_trainer.q_net.save_pretrained(
+                    str(chkpt_dir / f"ranker_q_net-{label}"), from_pt=True
+                )
+                gen_trainer.p_net.save_pretrained(
+                    str(chkpt_dir / f"gen_p_net-{label}"), from_pt=True
+                )
+                gen_trainer.v_net.save_pretrained(
+                    str(chkpt_dir / f"gen_v_net-{label}"), from_pt=True
+                )
+
 
 if __name__ == "__main__":
     main()

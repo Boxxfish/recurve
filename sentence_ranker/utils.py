@@ -86,6 +86,7 @@ def get_llm_scores(
     q_net: LlamaForSequenceClassification,
     input_ids: torch.Tensor,
     attn_masks: torch.Tensor,
+    use_sigmoid: bool,
 ) -> torch.Tensor:
     """Given `input_ids` and `attn_masks` of shape (batch_size, num_candidates, max_seq_len), returns a set of scores of shape (batch_size, num_candidates)."""
     batch_size, num_candidates, _ = input_ids.shape
@@ -126,7 +127,10 @@ def get_llm_scores(
             past_key_values=cache,
         ).logits.squeeze(-1)  # Shape: (num_candidates)
         q_vals.append(single_q_vals)
-    return torch.stack(q_vals, 0)
+    q_vals = torch.stack(q_vals, 0)
+    if use_sigmoid:
+        q_vals = q_vals.sigmoid()
+    return q_vals
 
 
 def copy_params(src: nn.Module, dest: nn.Module):

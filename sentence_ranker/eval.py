@@ -2,8 +2,8 @@ from pathlib import Path
 from typing import *
 from pydantic import BaseModel
 import torch
-from yaml import load, Loader # type: ignore
-from transformers import AutoTokenizer, LlamaForCausalLM, LlamaForSequenceClassification, LlamaConfig # type: ignore
+from yaml import load, Loader  # type: ignore
+from transformers import AutoTokenizer, LlamaForCausalLM, LlamaForSequenceClassification, LlamaConfig  # type: ignore
 from peft.peft_model import PeftModelForCausalLM, PeftModelForSequenceClassification
 
 from sentence_ranker.eval_utils import run_eval
@@ -20,19 +20,23 @@ class Args(BaseModel):
     runs_per_item: int = 1
     device: str = "cuda"
 
+
 class EvalResultOutput(BaseModel):
     text: str
     score: float
+
 
 class EvalResult(BaseModel):
     item_idx: int
     outputs: List[EvalResultOutput]
     avg_score: float
 
+
 class EvalResults(BaseModel):
     args: Args
     results: List[EvalResult]
     avg_score: float
+
 
 @torch.no_grad()
 def main():
@@ -45,7 +49,7 @@ def main():
 
     # Load models
     tokenizer = AutoTokenizer.from_pretrained(exp_meta.args.generator_base)
-    
+
     p_net_dir = chkpt_dir / f"gen_p_net-{args.chkpt_label}"
     p_net_base = LlamaForCausalLM.from_pretrained(exp_meta.args.generator_base)
     p_net = PeftModelForCausalLM.from_pretrained(p_net_base, p_net_dir)
@@ -56,7 +60,9 @@ def main():
     q_net_cfg = LlamaConfig.from_pretrained(exp_meta.args.ranker_base)
     q_net_cfg.num_labels = 1
     q_net_cfg.pad_token_id = tokenizer.pad_token_type_id
-    q_net_base = LlamaForSequenceClassification.from_pretrained(exp_meta.args.ranker_base, config=q_net_cfg)
+    q_net_base = LlamaForSequenceClassification.from_pretrained(
+        exp_meta.args.ranker_base, config=q_net_cfg
+    )
     q_net = PeftModelForSequenceClassification.from_pretrained(q_net_base, q_net_dir)
     q_net = q_net.merge_and_unload()
     q_net.eval()
@@ -65,10 +71,22 @@ def main():
     with open(args.dataset, "r") as f:
         data = load(f, Loader=Loader)
         dataset = Dataset.model_validate(data)
-    eval_results = run_eval(args, dataset, tokenizer, exp_meta.args.max_seq_len, args.runs_per_item, p_net, device, exp_meta.args.ranker_candidates, q_net)
+    eval_results = run_eval(
+        args,
+        dataset,
+        tokenizer,
+        exp_meta.args.max_seq_len,
+        args.runs_per_item,
+        p_net,
+        device,
+        exp_meta.args.ranker_candidates,
+        q_net,
+        exp_meta.args.ranker_use_sigmoid,
+    )
 
     with open(args.out, "w") as f:
         f.write(eval_results.model_dump_json(indent=2))
+
 
 if __name__ == "__main__":
     main()

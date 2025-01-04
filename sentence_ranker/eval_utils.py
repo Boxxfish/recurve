@@ -26,7 +26,7 @@ class EvalResults(BaseModel):
     avg_score: float
 
 @torch.no_grad()
-def run_eval(args: BaseModel, dataset: Dataset, tokenizer: AutoTokenizer, max_seq_len: int, runs_per_item: int, p_net: nn.Module, device: torch.device, ranker_candidates: int, q_net: Optional[nn.Module]) -> EvalResults:
+def run_eval(args: BaseModel, dataset: Dataset, tokenizer: AutoTokenizer, max_seq_len: int, runs_per_item: int, p_net: nn.Module, device: torch.device, ranker_candidates: int, q_net: Optional[nn.Module], use_sigmoid: bool) -> EvalResults:
     envs = DSEnvs(dataset, tokenizer, 1, max_seq_len, ranker_candidates)
     results = []
     avg_score_all = 0.0
@@ -41,7 +41,7 @@ def run_eval(args: BaseModel, dataset: Dataset, tokenizer: AutoTokenizer, max_se
             while True:
                 if q_net is not None:
                     q_net.to(device)
-                    q_vals = get_llm_scores(q_net, input_ids.to(device=device), attn_masks.to(device=device)).squeeze(0).cpu()
+                    q_vals = get_llm_scores(q_net, input_ids.to(device=device), attn_masks.to(device=device), use_sigmoid).squeeze(0).cpu()
                     q_net.cpu()
                     action = q_vals.argmax(0).squeeze().item()
                 else:
