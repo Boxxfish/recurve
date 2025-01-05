@@ -6,7 +6,7 @@ from torch import Tensor
 from transformers import PreTrainedTokenizer, LlamaForCausalLM, DynamicCache
 from torch.distributions import Categorical
 
-from sentence_ranker.utils import get_llm_logits # type: ignore
+from sentence_ranker.utils import get_llm_logits  # type: ignore
 
 
 class DSItem(BaseModel):
@@ -17,21 +17,26 @@ class DSItem(BaseModel):
 class Dataset(BaseModel):
     main_prompt: str  # Prompt prefix applied to all prompts in dataset
     items: List[DSItem]
-    score_fn: str   # Python code that scores the model's output
-    done_fn: str    # Python code that returns True when the model should stop generating
-    split_fn: str   # Python code that determines how the output should be split up for ranking
+    score_fn: str  # Python code that scores the model's output
+    done_fn: str  # Python code that returns True when the model should stop generating
+    split_fn: (
+        str  # Python code that determines how the output should be split up for ranking
+    )
 
-    def get_done_score_fns(self) -> Tuple[Callable[[str], bool], Callable[[str, str], float]]:
+    def get_done_score_fns(
+        self,
+    ) -> Tuple[Callable[[str], bool], Callable[[str, str], float]]:
         locs: Dict[str, Any] = {}
         exec(compile(self.done_fn + "\n\n" + self.score_fn, "", "exec"), locs)
         done_fn, score_fn = locs["done_fn"], locs["score_fn"]
         return done_fn, score_fn
-    
+
     def get_split_fn(self) -> Callable[[str], bool]:
         locs: Dict[str, Any] = {}
         exec(compile(self.split_fn, "", "exec"), locs)
         split_fn = locs["split_fn"]
         return split_fn
+
 
 LLAMA_TEMPLATE = """
 {{ bos_token }}{% for message in messages -%}
@@ -42,64 +47,51 @@ LLAMA_TEMPLATE = """
 {% endif %}
 """.strip()
 
+
 class DSEnvs:
     def __init__(
         self,
         ds: Dataset,
         tokenizer: PreTrainedTokenizer,
-        num_envs: int,
         max_seq_len: int,
         num_candidates: int,
+        vocab_size: int,
     ):
         self.ds = ds
         self.tokenizer = tokenizer
-        self.num_envs = num_envs
+        self.num_envs = 1
         self.max_seq_len = max_seq_len
-        self.input_ids = torch.zeros([num_envs, max_seq_len], dtype=torch.int)
-        self.attn_masks = torch.zeros([num_envs, max_seq_len], dtype=torch.bool)
-        self.candidate_input_ids = torch.zeros([num_envs, num_candidates, max_seq_len], dtype=torch.int)
-        self.candidate_attn_masks = torch.zeros([num_envs, num_candidates, max_seq_len], dtype=torch.bool)
-        self.candidate_texts = [[None] * num_candidates for _ in range(num_envs)]
+        self.vocab_size = vocab_size
+        self.input_ids = torch.zeros([self.num_envs, max_seq_len], dtype=torch.int)
+        self.attn_masks = torch.zeros([self.num_envs, max_seq_len], dtype=torch.bool)
+        self.candidate_input_ids = torch.zeros(
+            [self.num_envs, num_candidates, max_seq_len], dtype=torch.int
+        )
+        self.candidate_attn_masks = torch.zeros(
+            [self.num_envs, num_candidates, max_seq_len], dtype=torch.bool
+        )
+        self.candidate_logits = torch.zeros(
+            [self.num_envs, num_candidates, max_seq_len, vocab_size], dtype=torch.float
+        )
+        self.candidate_texts = [[None] * num_candidates for _ in range(self.num_envs)]
         self.num_candidates = num_candidates
-        self.nexts = torch.zeros([num_envs], dtype=torch.int)
+        self.nexts = torch.zeros([self.num_envs], dtype=torch.int)
         self.done_fn, self.score_fn = ds.get_done_score_fns()
         self.split_fn = ds.get_split_fn()
-        self.ds_idxs = [0] * num_envs
+        self.ds_idxs = [0] * self.num_envs
 
-    def step(
-        self, actions: Tensor
-    ) -> Tuple[Tuple[Tensor, Tensor], List[float], List[bool], List[bool], dict]:
-        """Steps through the environment, for generators."""
-        self.input_ids[torch.arange(0, self.num_envs), self.nexts] = actions.int()
-        self.attn_masks[torch.arange(0, self.num_envs), self.nexts] = True
-        self.nexts += 1
-        texts = self.get_current_texts()
-        dones = [
-            self.done_fn(text)
-            for text in texts
-        ]
-        rewards = [
-            (
-                self.score_fn(
-                    text,
-                    self.ds.items[self.ds_idxs[i]].answer,
-                )
-                if done
-                else 0.0
-            )
-            for i, (done, text) in enumerate(zip(dones, texts))
-        ]
-        truncs = [next == self.max_seq_len for next in self.nexts]
-        for i, (done, trunc) in enumerate(zip(dones, truncs)):
-            if done or trunc:
-                self._reset_env(i)
-        states = (self.input_ids.clone(), self.attn_masks.clone())
-        return (states, rewards, dones, truncs, {})
-
-    def step_ranker(self, actions: Tensor, lm: LlamaForCausalLM, reset: bool = True) -> Tuple[Tuple[Tensor, Tensor], List[float], List[bool], List[bool], dict]:
+    def step_ranker(
+        self, actions: Tensor, lm: LlamaForCausalLM, reset: bool = True
+    ) -> Tuple[
+        Tuple[Tensor, Tensor, Tensor], List[float], List[bool], List[bool], dict
+    ]:
         """Steps through the environment, for rankers."""
-        self.input_ids = self.candidate_input_ids[torch.arange(0, self.num_envs), actions.int()]
-        self.attn_masks = self.candidate_attn_masks[torch.arange(0, self.num_envs), actions.int()]
+        self.input_ids = self.candidate_input_ids[
+            torch.arange(0, self.num_envs), actions.int()
+        ]
+        self.attn_masks = self.candidate_attn_masks[
+            torch.arange(0, self.num_envs), actions.int()
+        ]
         self.nexts = self.attn_masks.int().argmin(1)
         texts = self.get_current_texts()
         dones = [
@@ -122,28 +114,32 @@ class DSEnvs:
             if (done or trunc) and reset:
                 self._reset_env(i)
             self._gen_candidates(i, lm)
-        states = (self.candidate_input_ids.clone(), self.candidate_attn_masks.clone())
+        states = (
+            self.candidate_input_ids.clone(),
+            self.candidate_attn_masks.clone(),
+            self.candidate_logits.clone(),
+        )
         return (states, rewards, dones, truncs, {})
 
-    def reset(self) -> Tuple[Tensor, Tensor]:
-        """Resets the environment, for generators."""
-        for i in range(self.num_envs):
-            self._reset_env(i)
-        return self.input_ids, self.attn_masks
-    
-    def reset_ranker(self, lm: LlamaForCausalLM) -> Tuple[Tensor, Tensor]:
+    def reset_ranker(self, lm: LlamaForCausalLM) -> Tuple[Tensor, Tensor, Tensor]:
         """Resets the environment, for rankers."""
         for i in range(self.num_envs):
             self._reset_env(i)
             self._gen_candidates(i, lm)
-        return self.candidate_input_ids.clone(), self.candidate_attn_masks.clone()
+        return (
+            self.candidate_input_ids.clone(),
+            self.candidate_attn_masks.clone(),
+            self.candidate_logits.clone(),
+        )
 
     def use_item(self, item_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Sets the dataset item to use for this episode, for generators."""
         self._reset_env(0, item_idx)
         return self.input_ids.clone(), self.attn_masks.clone()
-    
-    def use_item_ranker(self, item_idx: int, lm: LlamaForCausalLM) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    def use_item_ranker(
+        self, item_idx: int, lm: LlamaForCausalLM
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Sets the dataset item to use for this episode, for rankers."""
         self._reset_env(0, item_idx)
         self._gen_candidates(0, lm)
@@ -171,7 +167,7 @@ class DSEnvs:
         inpt = self.tokenizer.apply_chat_template(
             [
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": instr}
+                {"role": "user", "content": instr},
             ],
             add_generation_prompt=True,
             return_tensors="pt",
@@ -189,29 +185,42 @@ class DSEnvs:
         for j in range(self.num_candidates):
             new_input_ids = self.input_ids[i].clone()
             new_attn_masks = self.attn_masks[i].clone()
+            new_logits = torch.zeros([self.max_seq_len, self.vocab_size])
             new_next = self.nexts[i].item()
             next_input_ids = new_input_ids
             next_attn_masks = new_attn_masks
             start_idx = new_next
             cache = DynamicCache()
             while True:
-                logits, cache = get_llm_logits(lm, next_input_ids.unsqueeze(0).to(device), next_attn_masks.unsqueeze(0).to(device), cache)
+                logits, cache = get_llm_logits(
+                    lm,
+                    next_input_ids.unsqueeze(0).to(device),
+                    next_attn_masks.unsqueeze(0).to(device),
+                    cache,
+                )
                 input_id = Categorical(logits=logits).sample().squeeze().cpu().item()
                 new_input_ids[new_next] = input_id
                 new_attn_masks[new_next] = True
+                new_logits[new_next] = logits.squeeze().cpu()
                 new_next += 1
-                next_input_ids = new_input_ids[new_next - 1:]
-                next_attn_masks = new_attn_masks[new_next - 1:]
+                next_input_ids = new_input_ids[new_next - 1 :]
+                next_attn_masks = new_attn_masks[new_next - 1 :]
                 all_text = self.tokenizer.decode(new_input_ids[:new_next])
                 text = self.tokenizer.decode(new_input_ids[start_idx:new_next])
-                if self.split_fn(text) or self.done_fn(all_text) or new_next >= self.max_seq_len - 1:
+                if (
+                    self.split_fn(text)
+                    or self.done_fn(all_text)
+                    or new_next >= self.max_seq_len - 1
+                ):
                     break
             self.candidate_texts[i][j] = text
             self.candidate_input_ids[i, j, :] = new_input_ids
             self.candidate_attn_masks[i, j, :] = new_attn_masks
+            self.candidate_logits[i, j] = new_logits
+
 
 if __name__ == "__main__":
-    from yaml import load, Loader # type: ignore
+    from yaml import load, Loader  # type: ignore
     from transformers.models.llama import LlamaTokenizerFast  # type: ignore
 
     dataset_path = "datasets/best_lang.yaml"

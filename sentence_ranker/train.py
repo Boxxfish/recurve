@@ -13,7 +13,6 @@ from peft import LoraConfig
 from sentence_ranker.algorithms.dqn import train_dqn
 from sentence_ranker.algorithms.ppo import train_ppo
 from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
-from sentence_ranker.algorithms.rollout_buffer import RolloutBuffer
 from sentence_ranker.datasets import DSEnvs, Dataset
 from sentence_ranker.eval_utils import run_eval
 from sentence_ranker.utils import (
@@ -26,7 +25,7 @@ from sentence_ranker.utils import (
 
 class Args(BaseModel):
     exp_base_dir: str = "./runs"
-    iterations: int = 100_000
+    iterations: int = 10_000
     device: str = "cuda"
     dataset: str
     save_every: int = 10
@@ -35,8 +34,9 @@ class Args(BaseModel):
 
     # Ranker settings
     ranker_base: str = "meta-llama/Llama-3.2-1B"
+    ranker_sample_steps: int = 4 # Number of steps the ranker takes when sampling
     ranker_candidates: int = (
-        10  # Number of candidate sentences to generate on each timestep
+        8  # Number of candidate sentences to generate on each timestep
     )
     ranker_buffer_size: int = (
         10_000  # Number of elements that can be stored in the buffer
@@ -61,19 +61,16 @@ class Args(BaseModel):
     max_seq_len: int = (
         256  # Max length of an input, including the prompt + special tokens
     )
-    gen_num_envs: int = 2  # Number of parallel generations during sampling
-    gen_num_steps: int = 512  # How many steps to take during sampling
     gen_train_mode: Literal["frozen", "sentence", "full"] = "frozen"
     gen_train_iters: int = (
         2  # Number of training iterations per generator training iteration
     )
-    gen_train_batch_size: int = 8  # Batch size for PPO
     gen_lambda: float = 0.95  # Lambda for GAE
     gen_epsilon: float = 0.2  # Probability ratio cutoff for PPO
     gen_p_lr: float = 0.00001
     gen_v_lr: float = 0.0001
     gen_grad_steps: int = 1  # Number of gradient steps to take during PPO
-    gen_entropy_coeff: float = 0.0  # Entropy coefficient for PPO
+    gen_entropy_coeff: float = 0.03  # Entropy coefficient for PPO
     gen_sft_coeff: float = 0.1  # SFT coefficient for PPO (Prevents logit collapse)
     gen_train_after: int = 10  # Number of steps to wait until generator training starts
 
@@ -115,13 +112,6 @@ class GeneratorTrainer:
 
         self.p_opt = torch.optim.Adam(self.p_net.parameters(), lr=args.gen_p_lr)
         self.v_opt = torch.optim.Adam(self.v_net.parameters(), lr=args.gen_v_lr)
-        self.buffer = RolloutBuffer(
-            args.max_seq_len,
-            int(self.p_net.vocab_size),
-            args.gen_num_envs,
-            args.gen_num_steps,
-        )
-        self.envs = DSEnvs(ds, self.tokenizer, args.gen_num_envs, args.max_seq_len, 1)
 
 
 class RankerTrainer:
@@ -153,7 +143,7 @@ class RankerTrainer:
             args.ranker_buffer_size,
         )
         self.envs = DSEnvs(
-            ds, self.tokenizer, 1, args.max_seq_len, args.ranker_candidates
+            ds, self.tokenizer, args.max_seq_len, args.ranker_candidates, int(self.p_net.vocab_size)
         )
 
 
@@ -185,13 +175,13 @@ def main():
     device = torch.device(args.device)
     gen_trainer.p_net.to(device)
     with torch.no_grad():
-        input_ids, attn_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        input_ids, attn_masks, logits = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
         print("Filling replay buffer:")
         with tqdm(total=ranker_trainer.buffer.capacity) as pbar:
             while not ranker_trainer.buffer.filled:
                 action = random.randrange(0, args.ranker_candidates)
                 actions = torch.tensor([action])
-                (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = (
+                (next_input_ids, next_attn_masks, next_logits), rewards, dones, _, _ = (
                     ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
                 )
                 ranker_trainer.buffer.insert_step(
@@ -202,11 +192,10 @@ def main():
                     actions.unsqueeze(-1),
                     rewards,
                     dones,
-                    None,
-                    None,
+                    logits,
+                    torch.zeros([args.ranker_candidates], dtype=torch.float), # Unecessary since we aren't training the generator yet
                 )
-                input_ids = next_input_ids
-                attn_masks = next_attn_masks
+                input_ids, attn_masks, logits = next_input_ids, next_attn_masks, next_logits
                 pbar.update(1)
     gen_trainer.p_net.cpu()
 
@@ -216,33 +205,46 @@ def main():
         ####
         percent_done = train_step / args.iterations
         gen_trainer.p_net.to(device)
-        input_ids, attn_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        input_ids, attn_masks, logits = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
         gen_trainer.p_net.cpu()
-        step_idxs = []
+        step_idxs: List[int] = []
         with torch.no_grad():
-            while True:
+            print("Collecting transitions...")
+            for _ in range(args.ranker_sample_steps):
+                # Compute Q values
+                ranker_trainer.q_net.to(device)
+                q_vals = get_llm_scores(
+                    ranker_trainer.q_net,
+                    input_ids.to(device),
+                    attn_masks.to(device),
+                    args.ranker_use_sigmoid,
+                ).squeeze(
+                    0
+                )  # Shape: (num_candidates)
+                ranker_trainer.q_net.cpu()
+
+                # Select action
                 if random.random() < args.ranker_q_epsilon * max(
                     1.0 - percent_done, 0.05
                 ):
                     action = random.randrange(0, args.ranker_candidates)
                 else:
-                    ranker_trainer.q_net.to(device)
-                    q_vals = get_llm_scores(
-                        ranker_trainer.q_net,
-                        input_ids.to(device),
-                        attn_masks.to(device),
-                        args.ranker_use_sigmoid,
-                    ).squeeze(
-                        0
-                    )  # Shape: (num_candidates)
-                    ranker_trainer.q_net.cpu()
                     action = q_vals.argmax(0).cpu().item()
                 actions = torch.tensor([action])
+
+                # Perform a step in the environment
                 gen_trainer.p_net.to(device)
-                (next_input_ids, next_attn_masks), rewards, dones, truncs, _ = (
+                (next_input_ids, next_attn_masks, next_logits), rewards, dones, _, _ = (
                     ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
                 )
                 gen_trainer.p_net.cpu()
+
+                # Compute candidate rewards
+                candidate_rewards = q_vals
+                if dones[0]:
+                    candidate_rewards[action] = rewards[0]
+
+                # Insert step results into buffer
                 step_idxs.append(ranker_trainer.buffer.next)
                 ranker_trainer.buffer.insert_step(
                     input_ids,
@@ -252,19 +254,31 @@ def main():
                     actions.unsqueeze(-1),
                     rewards,
                     dones,
-                    None,
-                    None,
+                    logits,
+                    candidate_rewards,
                 )
-                input_ids = next_input_ids
-                attn_masks = next_attn_masks
+                input_ids, attn_masks, logits = next_input_ids, next_attn_masks, next_logits
 
-                if dones[0] or truncs[0]:
-                    break
+            # Run SFT model over transitions and collect logits
+            print("Collecting SFT logits...")
+            gen_trainer.sft_net.to(device)
+            for buffer_idx in tqdm(step_idxs, position=1):
+                input_ids = ranker_trainer.buffer.input_ids[buffer_idx]
+                attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
+                logits, _ = get_llm_logits(
+                    gen_trainer.sft_net,
+                    input_ids.to(device=device),
+                    attn_masks.to(device=device),
+                )
+                gen_trainer.buffer.sft_logits[buffer_idx].copy_(logits)
+            gen_trainer.sft_net.cpu()
         
+        exit()
+
         ####
         ## Ranker
         ####
-        # Train network
+        print("Training ranker...")
         avg_q_loss = 0.0
         total_q_loss = train_dqn(
             ranker_trainer.q_net,
@@ -290,51 +304,7 @@ def main():
         ####
         avg_p_loss, avg_v_loss = 0.0, 0.0
         if args.gen_train_mode != "frozen" and train_step > args.gen_train_after:
-            input_ids, attn_masks = gen_trainer.envs.reset()
-            # Sample with generator policy
-            with torch.no_grad():
-                # Step through env with generator policy and collect transitions
-                print("Collecting generator transitions...")
-                gen_trainer.p_net.to(device)
-                for _ in tqdm(range(args.gen_num_steps), position=1):
-                    logits, _ = get_llm_logits(
-                        gen_trainer.p_net,
-                        input_ids.to(device=device),
-                        attn_masks.to(device=device),
-                    )
-                    actions = Categorical(logits=logits).sample().to(device="cpu")
-                    (input_ids_, attn_masks_), rewards, dones, truncs, _ = (
-                        gen_trainer.envs.step(actions)
-                    )
-                    gen_trainer.buffer.insert_step(
-                        input_ids,
-                        attn_masks,
-                        actions.unsqueeze(-1),
-                        logits,
-                        rewards,
-                        dones,
-                        truncs,
-                    )
-                    input_ids, attn_masks = input_ids_, attn_masks_
-                gen_trainer.buffer.insert_final_step(input_ids, attn_masks)
-                gen_trainer.p_net.cpu()
-
-                # Run SFT model over transitions and collect logits
-                print("Collecting SFT logits...")
-                gen_trainer.sft_net.to(device)
-                for buffer_idx in tqdm(range(args.gen_num_steps), position=1):
-                    input_ids = gen_trainer.buffer.input_ids[buffer_idx]
-                    attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
-                    logits, _ = get_llm_logits(
-                        gen_trainer.sft_net,
-                        input_ids.to(device=device),
-                        attn_masks.to(device=device),
-                    )
-                    gen_trainer.buffer.sft_action_probs[buffer_idx].copy_(logits)
-
-                gen_trainer.sft_net.cpu()
-
-            # Train generator
+            print("Training generator...")
             total_p_loss, total_v_loss = train_ppo(
                 gen_trainer.p_net,
                 gen_trainer.v_net,
