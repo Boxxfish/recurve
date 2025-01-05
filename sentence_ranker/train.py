@@ -18,6 +18,7 @@ from sentence_ranker.eval_utils import run_eval
 from sentence_ranker.utils import (
     create_directory,
     get_llm_logits,
+    get_llm_logits_candidates,
     get_llm_scores,
     parse_args,
 )
@@ -92,6 +93,7 @@ class GeneratorTrainer:
         )
         self.p_net = LlamaForCausalLM.from_pretrained(args.generator_base)
         self.p_net.add_adapter(p_net_lora_cfg, "default")
+        self.p_net.cpu()
 
         # Value model
         v_net_lora_cfg = LoraConfig(
@@ -107,8 +109,10 @@ class GeneratorTrainer:
             args.generator_base, config=v_net_cfg
         )
         self.v_net.add_adapter(v_net_lora_cfg, "default")
+        self.v_net.cpu()
 
         self.sft_net = LlamaForCausalLM.from_pretrained(args.generator_sft)
+        self.sft_net.cpu()
 
         self.p_opt = torch.optim.Adam(self.p_net.parameters(), lr=args.gen_p_lr)
         self.v_opt = torch.optim.Adam(self.v_net.parameters(), lr=args.gen_v_lr)
@@ -133,17 +137,21 @@ class RankerTrainer:
             args.ranker_base, config=q_net_cfg
         )
         self.q_net.add_adapter(q_net_lora_cfg, "default")
+        self.q_net.cpu()
 
         self.target_q_net = copy.deepcopy(self.q_net)
+        self.target_q_net.cpu()
 
         self.q_opt = torch.optim.Adam(self.q_net.parameters(), lr=args.ranker_q_lr)
+        vocab_size = int(LlamaConfig.from_pretrained(args.generator_base).vocab_size)
         self.buffer = ReplayBuffer(
             args.max_seq_len,
             args.ranker_candidates,
             args.ranker_buffer_size,
+            vocab_size
         )
         self.envs = DSEnvs(
-            ds, self.tokenizer, args.max_seq_len, args.ranker_candidates, int(self.p_net.vocab_size)
+            ds, self.tokenizer, args.max_seq_len, args.ranker_candidates, vocab_size
         )
 
 
@@ -193,7 +201,7 @@ def main():
                     rewards,
                     dones,
                     logits,
-                    torch.zeros([args.ranker_candidates], dtype=torch.float), # Unecessary since we aren't training the generator yet
+                    torch.zeros([1, args.ranker_candidates], dtype=torch.float), # Unecessary since we aren't training the generator yet
                 )
                 input_ids, attn_masks, logits = next_input_ids, next_attn_masks, next_logits
                 pbar.update(1)
@@ -240,9 +248,10 @@ def main():
                 gen_trainer.p_net.cpu()
 
                 # Compute candidate rewards
-                candidate_rewards = q_vals
+                candidate_rewards = q_vals.cpu()
                 if dones[0]:
                     candidate_rewards[action] = rewards[0]
+                candidate_rewards.unsqueeze_(0)
 
                 # Insert step results into buffer
                 step_idxs.append(ranker_trainer.buffer.next)
@@ -264,13 +273,13 @@ def main():
             gen_trainer.sft_net.to(device)
             for buffer_idx in tqdm(step_idxs, position=1):
                 input_ids = ranker_trainer.buffer.input_ids[buffer_idx]
-                attn_masks = gen_trainer.buffer.attn_masks[buffer_idx]
-                logits, _ = get_llm_logits(
+                attn_masks = ranker_trainer.buffer.attn_masks[buffer_idx]
+                logits = get_llm_logits_candidates(
                     gen_trainer.sft_net,
                     input_ids.to(device=device),
                     attn_masks.to(device=device),
                 )
-                gen_trainer.buffer.sft_logits[buffer_idx].copy_(logits)
+                ranker_trainer.buffer.sft_logits[buffer_idx].copy_(logits)
             gen_trainer.sft_net.cpu()
         
         exit()

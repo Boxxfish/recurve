@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Literal, Optional, Tuple, TypeVar, Union, get_args, get_origin
 from transformers.modeling_outputs import CausalLMOutputWithPast  # type: ignore
-from transformers.models.llama import LlamaForCausalLM, LlamaForSequenceClassification # type: ignore
+from transformers.models.llama import LlamaForCausalLM, LlamaForSequenceClassification  # type: ignore
 from transformers import Cache, DynamicCache
 
 from pydantic import BaseModel
@@ -65,6 +65,7 @@ def get_llm_logits(
     attn_masks: torch.Tensor,
     cache: Optional[Cache],
 ) -> Tuple[torch.Tensor, Union[Cache, None]]:
+    """Given `input_ids` and `attn_masks` of shape (batch_size, max_seq_len), returns a set of logits of shape (batch_size, vocab_size)."""
     # Cap the length of the input using the longest sequence in the batch
     input_lens = attn_masks.byte().argmin(1) - 1
     max_len = input_lens.amax().item() + 1
@@ -82,6 +83,60 @@ def get_llm_logits(
     )
 
 
+def get_llm_logits_candidates(
+    p_net: LlamaForCausalLM,
+    input_ids: torch.Tensor,
+    attn_masks: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Given `input_ids` and `attn_masks` of shape (batch_size, max_seq_len), returns a set of logits of shape
+    (batch_size, max_seq_len, vocab_size).
+    This is intended for computing logits for a set of completions with a common prefix.
+    For memory reasons, the returned logits will always be on the CPU.
+    """
+    # Compute cached states for candidate prefixes
+    batch_size, max_seq_len = input_ids.shape
+    print(batch_size, max_seq_len)
+    assert batch_size > 1
+    prefix_idx = (input_ids[0] == input_ids[1]).byte().argmin().item() - 1
+    cache = DynamicCache()
+    lm_output = p_net.forward(
+        input_ids[:1, :prefix_idx],
+        attn_masks[:1, :prefix_idx],
+        past_key_values=cache,
+        use_cache=True,
+    )
+    prefix_logits = torch.cat(
+        [lm_output.logits.cpu()] * batch_size, dim=0
+    )  # Shape: (batch_size, prefix_len, vocab_size)
+    cache: DynamicCache = lm_output.past_key_values
+
+    # Repeat cache for each candidate
+    for i in range(len(cache.key_cache)):
+        cache.key_cache[i] = torch.cat([cache.key_cache[i]] * batch_size, dim=0)
+        cache.value_cache[i] = torch.cat([cache.value_cache[i]] * batch_size, dim=0)
+
+    # Run inference over all candidates
+    input_lens = attn_masks.byte().argmin(1) - 1
+    max_len = input_lens.amax().item() + 1
+    main_logits = p_net.forward(
+        input_ids[:, prefix_idx:max_len],
+        attn_masks[:, :max_len],
+        past_key_values=cache,
+    ).logits.cpu()  # Shape: (batch_size, max_len - prefix_len, vocab_size)
+
+    # Concat prefix, main, and padding logits
+    vocab_size = main_logits.shape[2]
+    padding = torch.zeros(
+        [batch_size, max_seq_len - max_len, vocab_size],
+        dtype=torch.float,
+    )
+    logits = torch.cat(
+        [prefix_logits, main_logits, padding], 1
+    )  # Shape: (batch_size, max_seq_len, vocab_size)
+    return logits
+
+
 def get_llm_scores(
     q_net: LlamaForSequenceClassification,
     input_ids: torch.Tensor,
@@ -89,7 +144,7 @@ def get_llm_scores(
     use_sigmoid: bool,
 ) -> torch.Tensor:
     """Given `input_ids` and `attn_masks` of shape (batch_size, num_candidates, max_seq_len), returns a set of scores of shape (batch_size, num_candidates)."""
-    batch_size, num_candidates, _ = input_ids.shape
+    _, num_candidates, _ = input_ids.shape
     assert num_candidates > 1, "Must supply multiple candidates per batch row"
     input_lens = attn_masks.byte().argmin(-1) - 1
 
@@ -99,12 +154,8 @@ def get_llm_scores(
     ):
         # Compute cached states for candidate prefixes
         prefix_idx = (
-            torch.logical_and(single_input_ids[0], single_input_ids[1])
-            .byte()
-            .argmin()
-            .item()
-            - 1
-        )
+            single_input_ids[0] == single_input_ids[1]
+        ).byte().argmin().item() - 1
         cache = DynamicCache()
         lm_output = q_net.forward(
             single_input_ids[:1, :prefix_idx],
@@ -117,15 +168,19 @@ def get_llm_scores(
         # Repeat cache for each candidate
         for i in range(len(cache.key_cache)):
             cache.key_cache[i] = torch.cat([cache.key_cache[i]] * num_candidates, dim=0)
-            cache.value_cache[i] = torch.cat([cache.value_cache[i]] * num_candidates, dim=0)
+            cache.value_cache[i] = torch.cat(
+                [cache.value_cache[i]] * num_candidates, dim=0
+            )
 
         # Run inference over all candidates
         max_len = single_input_lens.amax().item() + 1
         single_q_vals = q_net.forward(
-            single_input_ids[:, prefix_idx : max_len],
-            single_attn_masks[:,  : max_len],
+            single_input_ids[:, prefix_idx:max_len],
+            single_attn_masks[:, :max_len],
             past_key_values=cache,
-        ).logits.squeeze(-1)  # Shape: (num_candidates)
+        ).logits.squeeze(
+            -1
+        )  # Shape: (num_candidates)
         q_vals.append(single_q_vals)
     q_vals = torch.stack(q_vals, 0)
     if use_sigmoid:
