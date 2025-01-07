@@ -183,13 +183,13 @@ def main():
     device = torch.device(args.device)
     gen_trainer.p_net.to(device)
     with torch.no_grad():
-        input_ids, attn_masks, logits = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        input_ids, attn_masks, logits, candidate_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
         print("Filling replay buffer:")
         with tqdm(total=ranker_trainer.buffer.capacity) as pbar:
             while not ranker_trainer.buffer.filled:
                 action = random.randrange(0, args.ranker_candidates)
                 actions = torch.tensor([action])
-                (next_input_ids, next_attn_masks, next_logits), rewards, dones, _, _ = (
+                (next_input_ids, next_attn_masks, next_logits, next_candidate_masks), rewards, dones, _, _ = (
                     ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
                 )
                 ranker_trainer.buffer.insert_step(
@@ -201,9 +201,10 @@ def main():
                     rewards,
                     dones,
                     logits,
+                    candidate_masks,
                     torch.zeros([1, args.ranker_candidates], dtype=torch.float), # Unecessary since we aren't training the generator yet
                 )
-                input_ids, attn_masks, logits = next_input_ids, next_attn_masks, next_logits
+                input_ids, attn_masks, logits, candidate_masks = next_input_ids, next_attn_masks, next_logits, next_candidate_masks
                 pbar.update(1)
     gen_trainer.p_net.cpu()
 
@@ -213,7 +214,7 @@ def main():
         ####
         percent_done = train_step / args.iterations
         gen_trainer.p_net.to(device)
-        input_ids, attn_masks, logits = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        input_ids, attn_masks, logits, candidate_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
         gen_trainer.p_net.cpu()
         step_idxs: List[int] = []
         with torch.no_grad():
@@ -242,7 +243,7 @@ def main():
 
                 # Perform a step in the environment
                 gen_trainer.p_net.to(device)
-                (next_input_ids, next_attn_masks, next_logits), rewards, dones, _, _ = (
+                (next_input_ids, next_attn_masks, next_logits, next_candidate_masks), rewards, dones, _, _ = (
                     ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
                 )
                 gen_trainer.p_net.cpu()
@@ -264,9 +265,10 @@ def main():
                     rewards,
                     dones,
                     logits,
+                    candidate_masks,
                     candidate_rewards,
                 )
-                input_ids, attn_masks, logits = next_input_ids, next_attn_masks, next_logits
+                input_ids, attn_masks, logits, candidate_masks = next_input_ids, next_attn_masks, next_logits, next_candidate_masks
 
             # Run SFT model over transitions and collect logits
             print("Collecting SFT logits...")
@@ -281,32 +283,30 @@ def main():
                 )
                 ranker_trainer.buffer.sft_logits[buffer_idx].copy_(logits)
             gen_trainer.sft_net.cpu()
-        
-        exit()
 
         ####
         ## Ranker
         ####
-        print("Training ranker...")
-        avg_q_loss = 0.0
-        total_q_loss = train_dqn(
-            ranker_trainer.q_net,
-            ranker_trainer.target_q_net,
-            ranker_trainer.q_opt,
-            ranker_trainer.buffer,
-            device,
-            args.ranker_train_iters,
-            args.ranker_train_batch_size,
-            1.0,
-            args.ranker_grad_steps,
-        )
-        avg_q_loss += total_q_loss
+        # print("Training ranker...")
+        # avg_q_loss = 0.0
+        # total_q_loss = train_dqn(
+        #     ranker_trainer.q_net,
+        #     ranker_trainer.target_q_net,
+        #     ranker_trainer.q_opt,
+        #     ranker_trainer.buffer,
+        #     device,
+        #     args.ranker_train_iters,
+        #     args.ranker_train_batch_size,
+        #     1.0,
+        #     args.ranker_grad_steps,
+        # )
+        # avg_q_loss += total_q_loss
 
-        # Update Q target
-        if train_step % args.ranker_target_update == 0:
-            ranker_trainer.target_q_net.load_state_dict(
-                ranker_trainer.q_net.state_dict()
-            )
+        # # Update Q target
+        # if train_step % args.ranker_target_update == 0:
+        #     ranker_trainer.target_q_net.load_state_dict(
+        #         ranker_trainer.q_net.state_dict()
+        #     )
 
         ####
         ## Generator
@@ -319,7 +319,7 @@ def main():
                 gen_trainer.v_net,
                 gen_trainer.p_opt,
                 gen_trainer.v_opt,
-                gen_trainer.buffer,
+                ranker_trainer.buffer,
                 device,
                 args.gen_train_iters,
                 args.gen_train_batch_size,
@@ -330,9 +330,10 @@ def main():
                 gradient_steps=args.gen_grad_steps,
                 entropy_coeff=args.gen_entropy_coeff,
             )
-            gen_trainer.buffer.clear()
             avg_p_loss += total_p_loss
             avg_v_loss += total_v_loss
+
+        exit()
 
         ####
         ## Metrics, evaluation, and saving

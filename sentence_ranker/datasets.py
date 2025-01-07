@@ -73,6 +73,7 @@ class DSEnvs:
         self.candidate_logits = torch.zeros(
             [self.num_envs, num_candidates, max_seq_len, vocab_size], dtype=torch.float
         )
+        self.candidate_masks = torch.zeros([self.num_envs, num_candidates, max_seq_len], dtype=torch.bool)
         self.candidate_texts = [[None] * num_candidates for _ in range(self.num_envs)]
         self.num_candidates = num_candidates
         self.nexts = torch.zeros([self.num_envs], dtype=torch.int)
@@ -83,7 +84,7 @@ class DSEnvs:
     def step_ranker(
         self, actions: Tensor, lm: LlamaForCausalLM, reset: bool = True
     ) -> Tuple[
-        Tuple[Tensor, Tensor, Tensor], List[float], List[bool], List[bool], dict
+        Tuple[Tensor, Tensor, Tensor, Tensor], List[float], List[bool], List[bool], dict
     ]:
         """Steps through the environment, for rankers."""
         self.input_ids = self.candidate_input_ids[
@@ -118,10 +119,11 @@ class DSEnvs:
             self.candidate_input_ids.clone(),
             self.candidate_attn_masks.clone(),
             self.candidate_logits.clone(),
+            self.candidate_masks.clone(),
         )
         return (states, rewards, dones, truncs, {})
 
-    def reset_ranker(self, lm: LlamaForCausalLM) -> Tuple[Tensor, Tensor, Tensor]:
+    def reset_ranker(self, lm: LlamaForCausalLM) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Resets the environment, for rankers."""
         for i in range(self.num_envs):
             self._reset_env(i)
@@ -130,6 +132,7 @@ class DSEnvs:
             self.candidate_input_ids.clone(),
             self.candidate_attn_masks.clone(),
             self.candidate_logits.clone(),
+            self.candidate_masks.clone(),
         )
 
     def use_item(self, item_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -186,6 +189,7 @@ class DSEnvs:
             new_input_ids = self.input_ids[i].clone()
             new_attn_masks = self.attn_masks[i].clone()
             new_logits = torch.zeros([self.max_seq_len, self.vocab_size])
+            new_candidate_mask = torch.zeros([self.max_seq_len], dtype=torch.bool)
             new_next = self.nexts[i].item()
             next_input_ids = new_input_ids
             next_attn_masks = new_attn_masks
@@ -202,6 +206,7 @@ class DSEnvs:
                 new_input_ids[new_next] = input_id
                 new_attn_masks[new_next] = True
                 new_logits[new_next] = logits.squeeze().cpu()
+                new_candidate_mask[new_next] = True
                 new_next += 1
                 next_input_ids = new_input_ids[new_next - 1 :]
                 next_attn_masks = new_attn_masks[new_next - 1 :]
@@ -217,6 +222,7 @@ class DSEnvs:
             self.candidate_input_ids[i, j, :] = new_input_ids
             self.candidate_attn_masks[i, j, :] = new_attn_masks
             self.candidate_logits[i, j] = new_logits
+            self.candidate_masks[i, j] = new_candidate_mask
 
 
 if __name__ == "__main__":

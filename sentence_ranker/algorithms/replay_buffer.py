@@ -31,6 +31,7 @@ class ReplayBuffer:
         self.next_attn_masks = torch.zeros(attn_mask_shape, dtype=torch.bool, device=d, requires_grad=False)
         self.logits = torch.zeros(logits_shape, dtype=torch.float, device=d, requires_grad=False)
         self.sft_logits = torch.zeros(logits_shape, dtype=torch.float, device=d, requires_grad=False)
+        self.candidate_masks = torch.zeros(attn_mask_shape, dtype=torch.bool, device=d, requires_grad=False)
         self.candidate_rewards = torch.zeros([capacity, num_candidates], dtype=torch.float, device=d, requires_grad=False)
         self.actions = torch.zeros(
             action_shape, dtype=torch.int64, device=d, requires_grad=False
@@ -50,6 +51,7 @@ class ReplayBuffer:
         rewards: List[float],
         dones: List[bool],
         logits: torch.Tensor,
+        candidate_masks: torch.Tensor,
         candidate_rewards: torch.Tensor,
     ):
         """
@@ -68,6 +70,7 @@ class ReplayBuffer:
             self.next_input_ids.index_copy_(0, indices, next_input_ids)
             self.next_attn_masks.index_copy_(0, indices, next_attn_masks)
             self.logits.index_copy_(0, indices, logits)
+            self.candidate_masks.index_copy_(0, indices, candidate_masks)
             self.actions.index_copy_(0, indices, actions)
             self.candidate_rewards.index_copy_(0, indices, candidate_rewards)
             self.rewards.index_copy_(

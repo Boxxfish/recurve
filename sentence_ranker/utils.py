@@ -70,7 +70,7 @@ def get_llm_logits(
     input_lens = attn_masks.byte().argmin(1) - 1
     max_len = input_lens.amax().item() + 1
 
-    model_out: CausalLMOutputWithPast = p_net.forward(
+    model_out: CausalLMOutputWithPast = p_net(
         input_ids[:, :max_len],
         attn_masks[:, :max_len],
         return_dict=True,
@@ -100,7 +100,7 @@ def get_llm_logits_candidates(
     assert batch_size > 1
     prefix_idx = (input_ids[0] == input_ids[1]).byte().argmin().item() - 1
     cache = DynamicCache()
-    lm_output = p_net.forward(
+    lm_output = p_net(
         input_ids[:1, :prefix_idx],
         attn_masks[:1, :prefix_idx],
         past_key_values=cache,
@@ -119,7 +119,7 @@ def get_llm_logits_candidates(
     # Run inference over all candidates
     input_lens = attn_masks.byte().argmin(1) - 1
     max_len = input_lens.amax().item() + 1
-    main_logits = p_net.forward(
+    main_logits = p_net(
         input_ids[:, prefix_idx:max_len],
         attn_masks[:, :max_len],
         past_key_values=cache,
@@ -157,7 +157,7 @@ def get_llm_scores(
             single_input_ids[0] == single_input_ids[1]
         ).byte().argmin().item() - 1
         cache = DynamicCache()
-        lm_output = q_net.forward(
+        lm_output = q_net(
             single_input_ids[:1, :prefix_idx],
             single_attn_masks[:1, :prefix_idx],
             past_key_values=cache,
@@ -174,7 +174,7 @@ def get_llm_scores(
 
         # Run inference over all candidates
         max_len = single_input_lens.amax().item() + 1
-        single_q_vals = q_net.forward(
+        single_q_vals = q_net(
             single_input_ids[:, prefix_idx:max_len],
             single_attn_masks[:, :max_len],
             past_key_values=cache,
