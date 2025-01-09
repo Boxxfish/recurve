@@ -42,7 +42,7 @@ def run_eval(
     q_net: Optional[nn.Module],
     use_sigmoid: bool,
 ) -> EvalResults:
-    envs = DSEnvs(dataset, tokenizer, 1, max_seq_len, ranker_candidates)
+    envs = DSEnvs(dataset, tokenizer, max_seq_len, ranker_candidates, p_net.vocab_size)
     results = []
     avg_score_all = 0.0
     for item_idx in tqdm(range(len(dataset.items))):

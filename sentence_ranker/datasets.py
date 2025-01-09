@@ -110,7 +110,7 @@ class DSEnvs:
             )
             for i, (done, text) in enumerate(zip(dones, texts))
         ]
-        truncs = [next == self.max_seq_len for next in self.nexts]
+        truncs = [False] * self.num_envs
         for i, (done, trunc) in enumerate(zip(dones, truncs)):
             if (done or trunc) and reset:
                 self._reset_env(i)
@@ -202,10 +202,11 @@ class DSEnvs:
                     next_attn_masks.unsqueeze(0).to(device),
                     cache,
                 )
-                input_id = Categorical(logits=logits).sample().squeeze().cpu().item()
+                logits = logits.cpu()
+                input_id = Categorical(logits=logits).sample().squeeze().item()
                 new_input_ids[new_next] = input_id
                 new_attn_masks[new_next] = True
-                new_logits[new_next] = logits.squeeze().cpu()
+                new_logits[new_next] = logits.squeeze()
                 new_candidate_mask[new_next] = True
                 new_next += 1
                 next_input_ids = new_input_ids[new_next - 1 :]
@@ -235,7 +236,7 @@ if __name__ == "__main__":
         dataset = Dataset.model_validate(data)
     done_fn, score_fn = dataset.get_done_score_fns()
     tokenizer = LlamaTokenizerFast.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-    envs = DSEnvs(dataset, tokenizer, 4, 256, done_fn, score_fn, 1)
+    envs = DSEnvs(dataset, tokenizer, 256, done_fn, score_fn, 100)
     torch.set_printoptions(threshold=10_000)
 
     envs.reset()

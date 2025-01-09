@@ -62,7 +62,7 @@ class Args(BaseModel):
     max_seq_len: int = (
         256  # Max length of an input, including the prompt + special tokens
     )
-    gen_train_mode: Literal["frozen", "sentence", "full"] = "frozen"
+    gen_train_mode: Literal["frozen", "sentence"] = "sentence"
     gen_train_iters: int = (
         2  # Number of training iterations per generator training iteration
     )
@@ -213,11 +213,11 @@ def main():
         ## Collect experience
         ####
         percent_done = train_step / args.iterations
-        gen_trainer.p_net.to(device)
-        input_ids, attn_masks, logits, candidate_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
-        gen_trainer.p_net.cpu()
-        step_idxs: List[int] = []
         with torch.no_grad():
+            gen_trainer.p_net.to(device)
+            input_ids, attn_masks, logits, candidate_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+            gen_trainer.p_net.cpu()
+            step_idxs: List[int] = []
             print("Collecting transitions...")
             for _ in range(args.ranker_sample_steps):
                 # Compute Q values
@@ -229,7 +229,7 @@ def main():
                     args.ranker_use_sigmoid,
                 ).squeeze(
                     0
-                )  # Shape: (num_candidates)
+                ).cpu()  # Shape: (num_candidates)
                 ranker_trainer.q_net.cpu()
 
                 # Select action
@@ -238,7 +238,7 @@ def main():
                 ):
                     action = random.randrange(0, args.ranker_candidates)
                 else:
-                    action = q_vals.argmax(0).cpu().item()
+                    action = q_vals.argmax(0).item()
                 actions = torch.tensor([action])
 
                 # Perform a step in the environment
@@ -249,7 +249,7 @@ def main():
                 gen_trainer.p_net.cpu()
 
                 # Compute candidate rewards
-                candidate_rewards = q_vals.cpu()
+                candidate_rewards = q_vals
                 if dones[0]:
                     candidate_rewards[action] = rewards[0]
                 candidate_rewards.unsqueeze_(0)
@@ -312,7 +312,7 @@ def main():
         ## Generator
         ####
         avg_p_loss, avg_v_loss = 0.0, 0.0
-        if args.gen_train_mode != "frozen" and train_step > args.gen_train_after:
+        if args.gen_train_mode != "frozen" and train_step >= args.gen_train_after:
             print("Training generator...")
             total_p_loss, total_v_loss = train_ppo(
                 gen_trainer.p_net,
@@ -322,13 +322,13 @@ def main():
                 ranker_trainer.buffer,
                 device,
                 args.gen_train_iters,
-                args.gen_train_batch_size,
                 1.0,
                 args.gen_lambda,
                 args.gen_epsilon,
                 args.gen_sft_coeff,
-                gradient_steps=args.gen_grad_steps,
-                entropy_coeff=args.gen_entropy_coeff,
+                args.gen_grad_steps,
+                args.gen_entropy_coeff,
+                step_idxs,
             )
             avg_p_loss += total_p_loss
             avg_v_loss += total_v_loss

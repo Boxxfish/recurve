@@ -96,7 +96,6 @@ def get_llm_logits_candidates(
     """
     # Compute cached states for candidate prefixes
     batch_size, max_seq_len = input_ids.shape
-    print(batch_size, max_seq_len)
     assert batch_size > 1
     prefix_idx = (input_ids[0] == input_ids[1]).byte().argmin().item() - 1
     cache = DynamicCache()
