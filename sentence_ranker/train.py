@@ -47,7 +47,7 @@ class Args(BaseModel):
         1.0  # Epsilon for epsilon greedy strategy. This gets annealed over time.
     )
     ranker_train_iters: int = (
-        16  # Number of training iterations per ranker training iteration
+        10  # Number of training iterations per ranker training iteration
     )
     ranker_q_lr: float = 0.0001
     ranker_train_batch_size: int = 4  # Batch size for DQN
@@ -287,26 +287,27 @@ def main():
         ####
         ## Ranker
         ####
-        # print("Training ranker...")
-        # avg_q_loss = 0.0
-        # total_q_loss = train_dqn(
-        #     ranker_trainer.q_net,
-        #     ranker_trainer.target_q_net,
-        #     ranker_trainer.q_opt,
-        #     ranker_trainer.buffer,
-        #     device,
-        #     args.ranker_train_iters,
-        #     args.ranker_train_batch_size,
-        #     1.0,
-        #     args.ranker_grad_steps,
-        # )
-        # avg_q_loss += total_q_loss
+        print("Training ranker...")
+        avg_q_loss = 0.0
+        total_q_loss = train_dqn(
+            ranker_trainer.q_net,
+            ranker_trainer.target_q_net,
+            ranker_trainer.q_opt,
+            ranker_trainer.buffer,
+            device,
+            args.ranker_train_iters,
+            args.ranker_train_batch_size,
+            1.0,
+            args.ranker_grad_steps,
+            args.ranker_use_sigmoid,
+        )
+        avg_q_loss += total_q_loss
 
-        # # Update Q target
-        # if train_step % args.ranker_target_update == 0:
-        #     ranker_trainer.target_q_net.load_state_dict(
-        #         ranker_trainer.q_net.state_dict()
-        #     )
+        # Update Q target
+        if train_step % args.ranker_target_update == 0:
+            ranker_trainer.target_q_net.load_state_dict(
+                ranker_trainer.q_net.state_dict()
+            )
 
         ####
         ## Generator
@@ -332,8 +333,6 @@ def main():
             )
             avg_p_loss += total_p_loss
             avg_v_loss += total_v_loss
-
-        exit()
 
         ####
         ## Metrics, evaluation, and saving

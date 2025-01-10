@@ -35,7 +35,7 @@ def train_dqn(
 
     total_q_loss = 0.0
     for i in range(train_iters):
-        prev_input_ids, prev_attn_masks, input_ids, attn_masks, actions, rewards, dones, _, _ = buffer.sample(
+        prev_input_ids, prev_attn_masks, input_ids, attn_masks, actions, rewards, dones = buffer.sample(
             train_batch_size
         )
 
