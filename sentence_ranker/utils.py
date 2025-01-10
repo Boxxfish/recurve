@@ -87,6 +87,7 @@ def get_llm_logits_candidates(
     p_net: LlamaForCausalLM,
     input_ids: torch.Tensor,
     attn_masks: torch.Tensor,
+    candidate_masks: torch.Tensor,
 ) -> torch.Tensor:
     """
     Given `input_ids` and `attn_masks` of shape (batch_size, max_seq_len), returns a set of logits of shape
@@ -97,7 +98,7 @@ def get_llm_logits_candidates(
     # Compute cached states for candidate prefixes
     batch_size, max_seq_len = input_ids.shape
     assert batch_size > 1
-    prefix_idx = (input_ids[0] == input_ids[1]).byte().argmin().item() - 1
+    prefix_idx = candidate_masks[0].byte().argmax().item() - 1
     cache = DynamicCache()
     lm_output = p_net(
         input_ids[:1, :prefix_idx],
@@ -140,6 +141,7 @@ def get_llm_scores(
     q_net: LlamaForSequenceClassification,
     input_ids: torch.Tensor,
     attn_masks: torch.Tensor,
+    candidate_masks: torch.Tensor,
     use_sigmoid: bool,
 ) -> torch.Tensor:
     """Given `input_ids` and `attn_masks` of shape (batch_size, num_candidates, max_seq_len), returns a set of scores of shape (batch_size, num_candidates)."""
@@ -148,13 +150,10 @@ def get_llm_scores(
     input_lens = attn_masks.byte().argmin(-1) - 1
 
     q_vals = []
-    for single_input_ids, single_attn_masks, single_input_lens in zip(
-        input_ids, attn_masks, input_lens
+    for single_input_ids, single_attn_masks, single_input_lens, single_candidate_masks in zip(
+        input_ids, attn_masks, input_lens, candidate_masks
     ):
-        # Compute cached states for candidate prefixes
-        prefix_idx = (
-            single_input_ids[0] == single_input_ids[1]
-        ).byte().argmin().item() - 1
+        prefix_idx = single_candidate_masks[0].byte().argmax().item() - 1
         cache = DynamicCache()
         lm_output = q_net(
             single_input_ids[:1, :prefix_idx],

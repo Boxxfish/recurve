@@ -60,10 +60,10 @@ def train_ppo(
                 step_idx
             ]  # Shape: (num_candidates, max_seq_len)
             logits = buffer.logits[
-                step_idx
+                buffer.logit_buffer_idxs[step_idx]
             ]  # Shape: (num_candidates, max_seq_len, vocab_size)
             sft_logits = buffer.sft_logits[
-                step_idx
+                buffer.logit_buffer_idxs[step_idx]
             ]  # Shape: (num_candidates, max_seq_len, vocab_size)
             candidate_masks = buffer.candidate_masks[
                 step_idx
@@ -214,13 +214,21 @@ def train_ppo(
             p_net.cpu()
 
             # Train value network
+            torch.cuda.empty_cache()
             v_net.to(device)
             cache = DynamicCache()
             state_values_all = torch.zeros(
                 [num_candidates, max_seq_len], dtype=torch.float
             )
-            # TODO: Extract producing state values for all tokens into its own function, and precompute prefixes
-            for i in range(max_len):
+            # TODO: Extract producing state values for all tokens into its own function
+            prefix_idx = candidate_masks[0].byte().argmax().item() - 1
+            v_output = v_net(
+                input_ids[:, : prefix_idx].to(device),
+                attn_masks[:, : prefix_idx].to(device),
+                past_key_values=cache,
+            )
+            cache = v_output.past_key_values
+            for i in range(prefix_idx, max_len):
                 v_output = v_net(
                     input_ids[:, i : i + 1].to(device),
                     attn_masks[:, : i + 1].to(device),

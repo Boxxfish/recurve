@@ -148,7 +148,8 @@ class RankerTrainer:
             args.max_seq_len,
             args.ranker_candidates,
             args.ranker_buffer_size,
-            vocab_size
+            vocab_size,
+            args.ranker_sample_steps,
         )
         self.envs = DSEnvs(
             ds, self.tokenizer, args.max_seq_len, args.ranker_candidates, vocab_size
@@ -200,8 +201,9 @@ def main():
                     actions.unsqueeze(-1),
                     rewards,
                     dones,
-                    logits,
+                    None,
                     candidate_masks,
+                    next_candidate_masks,
                     torch.zeros([1, args.ranker_candidates], dtype=torch.float), # Unecessary since we aren't training the generator yet
                 )
                 input_ids, attn_masks, logits, candidate_masks = next_input_ids, next_attn_masks, next_logits, next_candidate_masks
@@ -226,6 +228,7 @@ def main():
                     ranker_trainer.q_net,
                     input_ids.to(device),
                     attn_masks.to(device),
+                    candidate_masks,
                     args.ranker_use_sigmoid,
                 ).squeeze(
                     0
@@ -266,6 +269,7 @@ def main():
                     dones,
                     logits,
                     candidate_masks,
+                    next_candidate_masks,
                     candidate_rewards,
                 )
                 input_ids, attn_masks, logits, candidate_masks = next_input_ids, next_attn_masks, next_logits, next_candidate_masks
@@ -273,15 +277,17 @@ def main():
             # Run SFT model over transitions and collect logits
             print("Collecting SFT logits...")
             gen_trainer.sft_net.to(device)
-            for buffer_idx in tqdm(step_idxs, position=1):
+            for logit_idx, buffer_idx in tqdm(enumerate(step_idxs), position=1):
                 input_ids = ranker_trainer.buffer.input_ids[buffer_idx]
                 attn_masks = ranker_trainer.buffer.attn_masks[buffer_idx]
+                candidate_masks = ranker_trainer.buffer.candidate_masks[buffer_idx]
                 logits = get_llm_logits_candidates(
                     gen_trainer.sft_net,
                     input_ids.to(device=device),
                     attn_masks.to(device=device),
+                    candidate_masks,
                 )
-                ranker_trainer.buffer.sft_logits[buffer_idx].copy_(logits)
+                ranker_trainer.buffer.sft_logits[logit_idx].copy_(logits)
             gen_trainer.sft_net.cpu()
 
         ####
@@ -333,6 +339,7 @@ def main():
             )
             avg_p_loss += total_p_loss
             avg_v_loss += total_v_loss
+        ranker_trainer.buffer.reset_logits()
 
         ####
         ## Metrics, evaluation, and saving

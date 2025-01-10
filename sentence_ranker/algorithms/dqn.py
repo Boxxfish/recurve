@@ -35,7 +35,7 @@ def train_dqn(
 
     total_q_loss = 0.0
     for i in range(train_iters):
-        prev_input_ids, prev_attn_masks, input_ids, attn_masks, actions, rewards, dones = buffer.sample(
+        prev_input_ids, prev_attn_masks, input_ids, attn_masks, actions, rewards, dones, prev_candidate_masks, candidate_masks = buffer.sample(
             train_batch_size
         )
 
@@ -51,15 +51,15 @@ def train_dqn(
         # Train q network
         with torch.no_grad():
             q_net.to(device)
-            next_actions = get_llm_scores(q_net, input_ids, attn_masks, use_sigmoid).argmax(1) # Shape: (batch_size)
+            next_actions = get_llm_scores(q_net, input_ids, attn_masks, candidate_masks, use_sigmoid).argmax(1) # Shape: (batch_size)
             q_net.cpu()
 
             q_net_target.to(device)
-            q_target = rewards.unsqueeze(1) + discount * get_llm_scores(q_net_target, input_ids, attn_masks, use_sigmoid).detach().gather(1, next_actions.unsqueeze(1)) * (1.0 - dones.unsqueeze(1))
+            q_target = rewards.unsqueeze(1) + discount * get_llm_scores(q_net_target, input_ids, attn_masks, candidate_masks, use_sigmoid).detach().gather(1, next_actions.unsqueeze(1)) * (1.0 - dones.unsqueeze(1))
             q_net_target.cpu()
         
         q_net.to(device)
-        diff = get_llm_scores(q_net, prev_input_ids, prev_attn_masks, use_sigmoid).gather(1, actions) - q_target
+        diff = get_llm_scores(q_net, prev_input_ids, prev_attn_masks, prev_candidate_masks, use_sigmoid).gather(1, actions) - q_target
         q_loss = (diff * diff).mean()
         q_loss.backward()
 

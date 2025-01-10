@@ -73,7 +73,9 @@ class DSEnvs:
         self.candidate_logits = torch.zeros(
             [self.num_envs, num_candidates, max_seq_len, vocab_size], dtype=torch.float
         )
-        self.candidate_masks = torch.zeros([self.num_envs, num_candidates, max_seq_len], dtype=torch.bool)
+        self.candidate_masks = torch.zeros(
+            [self.num_envs, num_candidates, max_seq_len], dtype=torch.bool
+        )
         self.candidate_texts = [[None] * num_candidates for _ in range(self.num_envs)]
         self.num_candidates = num_candidates
         self.nexts = torch.zeros([self.num_envs], dtype=torch.int)
@@ -123,7 +125,9 @@ class DSEnvs:
         )
         return (states, rewards, dones, truncs, {})
 
-    def reset_ranker(self, lm: LlamaForCausalLM) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def reset_ranker(
+        self, lm: LlamaForCausalLM
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Resets the environment, for rankers."""
         for i in range(self.num_envs):
             self._reset_env(i)
@@ -135,18 +139,18 @@ class DSEnvs:
             self.candidate_masks.clone(),
         )
 
-    def use_item(self, item_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Sets the dataset item to use for this episode, for generators."""
-        self._reset_env(0, item_idx)
-        return self.input_ids.clone(), self.attn_masks.clone()
-
     def use_item_ranker(
         self, item_idx: int, lm: LlamaForCausalLM
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Sets the dataset item to use for this episode, for rankers."""
         self._reset_env(0, item_idx)
         self._gen_candidates(0, lm)
-        return self.candidate_input_ids.clone(), self.candidate_attn_masks.clone()
+        return (
+            self.candidate_input_ids.clone(),
+            self.candidate_attn_masks.clone(),
+            self.candidate_logits.clone(),
+            self.candidate_masks.clone(),
+        )
 
     def get_current_texts(self) -> List[str]:
         """Returns the text in each environment."""

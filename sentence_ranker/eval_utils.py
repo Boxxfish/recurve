@@ -50,7 +50,7 @@ def run_eval(
         outputs = []
         for _ in range(runs_per_item):
             p_net.to(device)
-            input_ids, attn_masks = envs.use_item_ranker(item_idx, p_net)
+            input_ids, attn_masks, _, candidate_masks = envs.use_item_ranker(item_idx, p_net)
             p_net.cpu()
             steps = []
             while True:
@@ -61,6 +61,7 @@ def run_eval(
                             q_net,
                             input_ids.to(device=device),
                             attn_masks.to(device=device),
+                            candidate_masks,
                             use_sigmoid,
                         )
                         .squeeze(0)
