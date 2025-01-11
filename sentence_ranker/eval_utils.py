@@ -79,7 +79,7 @@ def run_eval(
                 )
 
                 p_net.to(device)
-                (input_ids, attn_masks), rewards, dones, truncs, _ = envs.step_ranker(
+                (input_ids, attn_masks, _, candidate_masks), rewards, dones, truncs, _ = envs.step_ranker(
                     torch.tensor([action]), p_net, reset=False
                 )
                 p_net.cpu()

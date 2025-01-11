@@ -42,12 +42,12 @@ class Args(BaseModel):
     ranker_buffer_size: int = (
         10_000  # Number of elements that can be stored in the buffer
     )
-    ranker_target_update: int = 50  # Number of iterations before updating Q target
+    ranker_target_update: int = 100  # Number of iterations before updating Q target
     ranker_q_epsilon: float = (
         1.0  # Epsilon for epsilon greedy strategy. This gets annealed over time.
     )
     ranker_train_iters: int = (
-        10  # Number of training iterations per ranker training iteration
+        16  # Number of training iterations per ranker training iteration
     )
     ranker_q_lr: float = 0.0001
     ranker_train_batch_size: int = 4  # Batch size for DQN
@@ -73,7 +73,7 @@ class Args(BaseModel):
     gen_grad_steps: int = 1  # Number of gradient steps to take during PPO
     gen_entropy_coeff: float = 0.03  # Entropy coefficient for PPO
     gen_sft_coeff: float = 0.1  # SFT coefficient for PPO (Prevents logit collapse)
-    gen_train_after: int = 10  # Number of steps to wait until generator training starts
+    gen_train_after: int = 400  # Number of steps to wait until generator training starts
 
 
 class ExpMeta(BaseModel):
@@ -345,9 +345,6 @@ def main():
         ## Metrics, evaluation, and saving
         ####
         # Log metrics
-        avg_q_loss = avg_q_loss / args.ranker_train_loop_iters
-        avg_p_loss = avg_p_loss / args.gen_train_loop_iters
-        avg_v_loss = avg_v_loss / args.gen_train_loop_iters
         log_dict = {
             "gen_avg_q_loss": avg_q_loss,
             "gen_avg_p_loss": avg_p_loss,
