@@ -185,7 +185,6 @@ def get_llm_scores(
         q_vals = q_vals.sigmoid()
     return q_vals
 
-
 def copy_params(src: nn.Module, dest: nn.Module):
     """
     Copies params from one model to another.

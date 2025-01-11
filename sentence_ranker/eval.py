@@ -51,20 +51,14 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(exp_meta.args.generator_base)
 
     p_net_dir = chkpt_dir / f"gen_p_net-{args.chkpt_label}"
-    p_net_base = LlamaForCausalLM.from_pretrained(exp_meta.args.generator_base)
-    p_net = PeftModelForCausalLM.from_pretrained(p_net_base, p_net_dir)
-    p_net = p_net.merge_and_unload()
+    p_net = LlamaForCausalLM.from_pretrained(p_net_dir)
     p_net.eval()
 
     q_net_dir = chkpt_dir / f"ranker_q_net-{args.chkpt_label}"
     q_net_cfg = LlamaConfig.from_pretrained(exp_meta.args.ranker_base)
     q_net_cfg.num_labels = 1
     q_net_cfg.pad_token_id = tokenizer.pad_token_type_id
-    q_net_base = LlamaForSequenceClassification.from_pretrained(
-        exp_meta.args.ranker_base, config=q_net_cfg
-    )
-    q_net = PeftModelForSequenceClassification.from_pretrained(q_net_base, q_net_dir)
-    q_net = q_net.merge_and_unload()
+    q_net = LlamaForSequenceClassification.from_pretrained(q_net_dir)
     q_net.eval()
 
     # Evaluate on dataset

@@ -85,30 +85,32 @@ class GeneratorTrainer:
         self.tokenizer = LlamaTokenizerFast.from_pretrained(args.generator_base)
 
         # Policy model
-        p_net_lora_cfg = LoraConfig(
-            task_type="CAUSAL_LM",
-            r=8,
-            lora_alpha=32,
-            lora_dropout=0.1,
-        )
         self.p_net = LlamaForCausalLM.from_pretrained(args.generator_base)
-        self.p_net.add_adapter(p_net_lora_cfg, "default")
+        if len(self.p_net.active_adapters()) == 0:
+            p_net_lora_cfg = LoraConfig(
+                task_type="CAUSAL_LM",
+                r=8,
+                lora_alpha=32,
+                lora_dropout=0.1,
+            )
+            self.p_net.add_adapter(p_net_lora_cfg, "default")
         self.p_net.cpu()
 
         # Value model
-        v_net_lora_cfg = LoraConfig(
-            task_type="SEQ_CLS",
-            r=8,
-            lora_alpha=32,
-            lora_dropout=0.1,
-        )
         v_net_cfg = copy.deepcopy(self.p_net.config)
         v_net_cfg.num_labels = 1
         v_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
         self.v_net = LlamaForSequenceClassification.from_pretrained(
             args.generator_base, config=v_net_cfg
         )
-        self.v_net.add_adapter(v_net_lora_cfg, "default")
+        if len(self.v_net.active_adapter()) == 0:
+            v_net_lora_cfg = LoraConfig(
+                task_type="SEQ_CLS",
+                r=8,
+                lora_alpha=32,
+                lora_dropout=0.1,
+            )
+            self.v_net.add_adapter(v_net_lora_cfg, "default")
         self.v_net.cpu()
 
         self.sft_net = LlamaForCausalLM.from_pretrained(args.generator_sft)
@@ -124,19 +126,21 @@ class RankerTrainer:
         self.tokenizer = LlamaTokenizerFast.from_pretrained(args.ranker_base)
 
         # Q model
-        q_net_lora_cfg = LoraConfig(
-            task_type="SEQ_CLS",
-            r=8,
-            lora_alpha=32,
-            lora_dropout=0.1,
-        )
-        q_net_cfg = copy.deepcopy(LlamaConfig.from_pretrained(args.ranker_base))
+        q_net_cfg = LlamaConfig.from_pretrained(args.ranker_base)
         q_net_cfg.num_labels = 1
         q_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
         self.q_net = LlamaForSequenceClassification.from_pretrained(
             args.ranker_base, config=q_net_cfg
         )
-        self.q_net.add_adapter(q_net_lora_cfg, "default")
+        if len(self.q_net.active_adapters()) == 0:
+            q_net_lora_cfg = LoraConfig(
+                task_type="SEQ_CLS",
+                r=8,
+                lora_alpha=32,
+                lora_dropout=0.1,
+                modules_to_save=["score.weight"]
+            )
+            self.q_net.add_adapter(q_net_lora_cfg, "default")
         self.q_net.cpu()
 
         self.target_q_net = copy.deepcopy(self.q_net)
