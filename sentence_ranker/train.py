@@ -4,7 +4,7 @@ from typing import *
 from pydantic import BaseModel
 import torch
 from tqdm import tqdm
-from transformers.models.llama import LlamaConfig, LlamaForSequenceClassification, LlamaForCausalLM, LlamaTokenizerFast  # type: ignore
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoModelForCausalLM, AutoTokenizer  # type: ignore
 from torch.distributions import Categorical
 from yaml import load, Loader  # type: ignore
 import wandb
@@ -82,11 +82,13 @@ class ExpMeta(BaseModel):
 
 class GeneratorTrainer:
     def __init__(self, args: Args, ds: Dataset):
-        self.tokenizer = LlamaTokenizerFast.from_pretrained(args.generator_base)
+        self.tokenizer = AutoTokenizer.from_pretrained(args.generator_base)
 
         # Policy model
-        self.p_net = LlamaForCausalLM.from_pretrained(args.generator_base)
-        if len(self.p_net.active_adapters()) == 0:
+        self.p_net = AutoModelForCausalLM.from_pretrained(args.generator_base)
+        try:
+            self.p_net.active_adapters()
+        except ValueError:
             p_net_lora_cfg = LoraConfig(
                 task_type="CAUSAL_LM",
                 r=8,
@@ -100,10 +102,12 @@ class GeneratorTrainer:
         v_net_cfg = copy.deepcopy(self.p_net.config)
         v_net_cfg.num_labels = 1
         v_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
-        self.v_net = LlamaForSequenceClassification.from_pretrained(
+        self.v_net = AutoModelForSequenceClassification.from_pretrained(
             args.generator_base, config=v_net_cfg
         )
-        if len(self.v_net.active_adapter()) == 0:
+        try:
+            self.v_net.active_adapters()
+        except ValueError:
             v_net_lora_cfg = LoraConfig(
                 task_type="SEQ_CLS",
                 r=8,
@@ -113,7 +117,7 @@ class GeneratorTrainer:
             self.v_net.add_adapter(v_net_lora_cfg, "default")
         self.v_net.cpu()
 
-        self.sft_net = LlamaForCausalLM.from_pretrained(args.generator_sft)
+        self.sft_net = AutoModelForCausalLM.from_pretrained(args.generator_sft)
         self.sft_net.cpu()
 
         self.p_opt = torch.optim.Adam(self.p_net.parameters(), lr=args.gen_p_lr)
@@ -123,16 +127,18 @@ class GeneratorTrainer:
 class RankerTrainer:
 
     def __init__(self, args: Args, ds: Dataset):
-        self.tokenizer = LlamaTokenizerFast.from_pretrained(args.ranker_base)
+        self.tokenizer = AutoTokenizer.from_pretrained(args.ranker_base)
 
         # Q model
-        q_net_cfg = LlamaConfig.from_pretrained(args.ranker_base)
+        q_net_cfg = AutoConfig.from_pretrained(args.ranker_base)
         q_net_cfg.num_labels = 1
         q_net_cfg.pad_token_id = self.tokenizer.pad_token_type_id
-        self.q_net = LlamaForSequenceClassification.from_pretrained(
+        self.q_net = AutoModelForSequenceClassification.from_pretrained(
             args.ranker_base, config=q_net_cfg
         )
-        if len(self.q_net.active_adapters()) == 0:
+        try:
+            self.q_net.active_adapters()
+        except ValueError:
             q_net_lora_cfg = LoraConfig(
                 task_type="SEQ_CLS",
                 r=8,
@@ -147,7 +153,7 @@ class RankerTrainer:
         self.target_q_net.cpu()
 
         self.q_opt = torch.optim.Adam(self.q_net.parameters(), lr=args.ranker_q_lr)
-        vocab_size = int(LlamaConfig.from_pretrained(args.generator_base).vocab_size)
+        vocab_size = int(AutoConfig.from_pretrained(args.generator_base).vocab_size)
         self.buffer = ReplayBuffer(
             args.max_seq_len,
             args.ranker_candidates,
@@ -162,6 +168,11 @@ class RankerTrainer:
 
 def main():
     args = parse_args(Args)
+
+    # Assert that the same model family is used for all models
+    model_family = args.ranker_base.split("/")[0]
+    assert model_family in args.generator_base
+    assert model_family in args.generator_sft
 
     # Wandb
     wandb.init(

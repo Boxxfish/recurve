@@ -3,8 +3,7 @@ from typing import *
 from pydantic import BaseModel
 import torch
 from yaml import load, Loader  # type: ignore
-from transformers import AutoTokenizer, LlamaForCausalLM, LlamaForSequenceClassification, LlamaConfig  # type: ignore
-from peft.peft_model import PeftModelForCausalLM, PeftModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification, AutoConfig  # type: ignore
 
 from sentence_ranker.eval_utils import run_eval
 from sentence_ranker.train import ExpMeta
@@ -51,14 +50,14 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(exp_meta.args.generator_base)
 
     p_net_dir = chkpt_dir / f"gen_p_net-{args.chkpt_label}"
-    p_net = LlamaForCausalLM.from_pretrained(p_net_dir)
+    p_net = AutoModelForCausalLM.from_pretrained(p_net_dir)
     p_net.eval()
 
     q_net_dir = chkpt_dir / f"ranker_q_net-{args.chkpt_label}"
-    q_net_cfg = LlamaConfig.from_pretrained(exp_meta.args.ranker_base)
+    q_net_cfg = AutoConfig.from_pretrained(exp_meta.args.ranker_base)
     q_net_cfg.num_labels = 1
     q_net_cfg.pad_token_id = tokenizer.pad_token_type_id
-    q_net = LlamaForSequenceClassification.from_pretrained(q_net_dir)
+    q_net = AutoModelForSequenceClassification.from_pretrained(q_net_dir, config=q_net_cfg)
     q_net.eval()
 
     # Evaluate on dataset

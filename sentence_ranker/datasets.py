@@ -3,7 +3,7 @@ from typing import *
 from pydantic import BaseModel
 import torch
 from torch import Tensor
-from transformers import PreTrainedTokenizer, LlamaForCausalLM, DynamicCache
+from transformers import PreTrainedTokenizer, AutoModelForCausalLM, DynamicCache
 from torch.distributions import Categorical
 
 from sentence_ranker.utils import get_llm_logits  # type: ignore
@@ -83,8 +83,12 @@ class DSEnvs:
         self.split_fn = ds.get_split_fn()
         self.ds_idxs = [0] * self.num_envs
 
+        # If using llama model, apply chat template
+        if "llama" in str(tokenizer.name_or_path).lower():
+            tokenizer.chat_template = LLAMA_TEMPLATE
+
     def step_ranker(
-        self, actions: Tensor, lm: LlamaForCausalLM, reset: bool = True
+        self, actions: Tensor, lm: AutoModelForCausalLM, reset: bool = True
     ) -> Tuple[
         Tuple[Tensor, Tensor, Tensor, Tensor], List[float], List[bool], List[bool], dict
     ]:
@@ -126,7 +130,7 @@ class DSEnvs:
         return (states, rewards, dones, truncs, {})
 
     def reset_ranker(
-        self, lm: LlamaForCausalLM
+        self, lm: AutoModelForCausalLM
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Resets the environment, for rankers."""
         for i in range(self.num_envs):
@@ -140,7 +144,7 @@ class DSEnvs:
         )
 
     def use_item_ranker(
-        self, item_idx: int, lm: LlamaForCausalLM
+        self, item_idx: int, lm: AutoModelForCausalLM
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Sets the dataset item to use for this episode, for rankers."""
         self._reset_env(0, item_idx)
@@ -179,14 +183,13 @@ class DSEnvs:
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=True,
-            chat_template=LLAMA_TEMPLATE,
         )
         num_toks = inpt.input_ids.shape[1]
         self.input_ids[i, :num_toks] = inpt.input_ids[0]
         self.attn_masks[i, :num_toks] = True
         self.nexts[i] = num_toks
 
-    def _gen_candidates(self, i: int, lm: LlamaForCausalLM):
+    def _gen_candidates(self, i: int, lm: AutoModelForCausalLM):
         """Generates action candidates for the ranker."""
         device = lm.device
         for j in range(self.num_candidates):
@@ -228,25 +231,3 @@ class DSEnvs:
             self.candidate_attn_masks[i, j, :] = new_attn_masks
             self.candidate_logits[i, j] = new_logits
             self.candidate_masks[i, j] = new_candidate_mask
-
-
-if __name__ == "__main__":
-    from yaml import load, Loader  # type: ignore
-    from transformers.models.llama import LlamaTokenizerFast  # type: ignore
-
-    dataset_path = "datasets/best_lang.yaml"
-    with open(dataset_path, "r") as f:
-        data = load(f, Loader=Loader)
-        dataset = Dataset.model_validate(data)
-    done_fn, score_fn = dataset.get_done_score_fns()
-    tokenizer = LlamaTokenizerFast.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-    envs = DSEnvs(dataset, tokenizer, 256, done_fn, score_fn, 100)
-    torch.set_printoptions(threshold=10_000)
-
-    envs.reset()
-    envs.step(torch.tensor([0, 1, 4, 2]))
-    envs.step(torch.tensor([1, 2, 3, 4]))
-    envs.step(torch.tensor([2, 3, 4, 6]))
-    print(envs.input_ids)
-    print(envs.attn_masks)
-    print(envs.nexts)

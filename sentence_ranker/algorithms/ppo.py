@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 from tqdm import tqdm
-from transformers import DynamicCache, LlamaForSequenceClassification, LlamaForCausalLM
+from transformers import DynamicCache, AutoModelForSequenceClassification, AutoModelForCausalLM
 
 from sentence_ranker.utils import get_llm_logits
 
@@ -14,8 +14,8 @@ from .replay_buffer import ReplayBuffer
 
 
 def train_ppo(
-    p_net: LlamaForCausalLM,
-    v_net: LlamaForSequenceClassification,
+    p_net: AutoModelForCausalLM,
+    v_net: AutoModelForSequenceClassification,
     p_opt: torch.optim.Optimizer,
     v_opt: torch.optim.Optimizer,
     buffer: ReplayBuffer,

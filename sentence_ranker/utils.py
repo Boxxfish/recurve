@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Literal, Optional, Tuple, TypeVar, Union, get_args, get_origin
 from transformers.modeling_outputs import CausalLMOutputWithPast  # type: ignore
-from transformers.models.llama import LlamaForCausalLM, LlamaForSequenceClassification  # type: ignore
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification  # type: ignore
 from transformers import Cache, DynamicCache
 
 from pydantic import BaseModel
@@ -60,7 +60,7 @@ def create_directory(out_dir_: str, meta: T) -> Path:
 
 
 def get_llm_logits(
-    p_net: LlamaForCausalLM,
+    p_net: AutoModelForCausalLM,
     input_ids: torch.Tensor,
     attn_masks: torch.Tensor,
     cache: Optional[Cache],
@@ -84,7 +84,7 @@ def get_llm_logits(
 
 
 def get_llm_logits_candidates(
-    p_net: LlamaForCausalLM,
+    p_net: AutoModelForCausalLM,
     input_ids: torch.Tensor,
     attn_masks: torch.Tensor,
     candidate_masks: torch.Tensor,
@@ -138,7 +138,7 @@ def get_llm_logits_candidates(
 
 
 def get_llm_scores(
-    q_net: LlamaForSequenceClassification,
+    q_net: AutoModelForSequenceClassification,
     input_ids: torch.Tensor,
     attn_masks: torch.Tensor,
     candidate_masks: torch.Tensor,

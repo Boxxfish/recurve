@@ -4,12 +4,12 @@ items:
     answer: Rust
 score_fn: |
   def score_fn(text: str, answer: str):
-    output = text.split("<|end_header_id|>")[-1]
+    output = text.split("assistant")[-1]
     out_ans = output.split("best programming language")[-1]
     return answer in out_ans
 done_fn: |
   def done_fn(text: str):
-    output = text.split("<|end_header_id|>")[-1]
+    output = text.split("assistant")[-1]
     if "best programming language" not in output:
       return False
     out_ans = output.split("best programming language")[-1]
