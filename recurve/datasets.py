@@ -6,7 +6,7 @@ from torch import Tensor
 from transformers import PreTrainedTokenizer, AutoModelForCausalLM, DynamicCache
 from torch.distributions import Categorical
 
-from sentence_ranker.utils import get_llm_logits  # type: ignore
+from recurve.utils import get_llm_logits  # type: ignore
 
 
 class DSItem(BaseModel):

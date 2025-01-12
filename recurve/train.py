@@ -10,12 +10,12 @@ from yaml import load, Loader  # type: ignore
 import wandb
 from peft import LoraConfig
 
-from sentence_ranker.algorithms.dqn import train_dqn
-from sentence_ranker.algorithms.ppo import train_ppo
-from sentence_ranker.algorithms.replay_buffer import ReplayBuffer
-from sentence_ranker.datasets import DSEnvs, Dataset
-from sentence_ranker.eval_utils import run_eval
-from sentence_ranker.utils import (
+from recurve.algorithms.dqn import train_dqn
+from recurve.algorithms.ppo import train_ppo
+from recurve.algorithms.replay_buffer import ReplayBuffer
+from recurve.datasets import DSEnvs, Dataset
+from recurve.eval_utils import run_eval
+from recurve.utils import (
     create_directory,
     get_llm_logits,
     get_llm_logits_candidates,
@@ -176,7 +176,7 @@ def main():
 
     # Wandb
     wandb.init(
-        project="sentence-ranker",
+        project="recurve",
         config=args.model_dump(),
     )
 

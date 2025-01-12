@@ -7,8 +7,8 @@ from torch.distributions import Categorical
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from sentence_ranker.datasets import DSEnvs, Dataset
-from sentence_ranker.utils import get_llm_scores
+from recurve.datasets import DSEnvs, Dataset
+from recurve.utils import get_llm_scores
 
 
 class EvalResultOutput(BaseModel):

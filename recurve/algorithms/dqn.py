@@ -3,7 +3,7 @@ from typing import Tuple
 import torch
 from torch import nn
 
-from sentence_ranker.utils import get_llm_scores
+from recurve.utils import get_llm_scores
 
 from .replay_buffer import ReplayBuffer
 

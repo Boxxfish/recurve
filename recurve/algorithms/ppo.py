@@ -8,7 +8,7 @@ from torch.distributions import Categorical
 from tqdm import tqdm
 from transformers import DynamicCache, AutoModelForSequenceClassification, AutoModelForCausalLM
 
-from sentence_ranker.utils import get_llm_logits
+from recurve.utils import get_llm_logits
 
 from .replay_buffer import ReplayBuffer
 

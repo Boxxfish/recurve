@@ -5,10 +5,10 @@ import torch
 from yaml import load, Loader  # type: ignore
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification, AutoConfig  # type: ignore
 
-from sentence_ranker.eval_utils import run_eval
-from sentence_ranker.train import ExpMeta
-from sentence_ranker.datasets import Dataset
-from sentence_ranker.utils import parse_args
+from recurve.eval_utils import run_eval
+from recurve.train import ExpMeta
+from recurve.datasets import Dataset
+from recurve.utils import parse_args
 
 
 class Args(BaseModel):

@@ -1,6 +1,6 @@
-## `recurve` - Train LLMs with Hierarchical RL
+## `recurve` - Train ___s with Hierarchical RL
 
-This repo uses the [ArCHer (Zhou et al., 2024)](https://yifeizhou02.github.io/archer.io/) framework to train LLMs hierarchically, by decomposing tasks into a high-level *phrase* component and low-level *token* component. This allows for substantially better sample efficiency and faster policy improvement times.
+This repo uses the [ArCHer (Zhou et al., 2024)](https://yifeizhou02.github.io/archer.io/) framework to train ___s hierarchically, by decomposing tasks into a high-level *utternace* component and low-level *token* component. This allows for substantially better sample efficiency and faster policy improvement times.
 
 ### Quickstart
 
@@ -14,13 +14,13 @@ eval $(poetry env activate)
 To track metrics, ensure that you've logged into Weights and Biases. You can now train your models like so:
 
 ```bash
-python -m sentence_ranker.train --dataset datasets/best_lang.yaml
+python -m recurve.train --dataset datasets/best_lang.yaml
 ```
 
 Checkpoints, evaluations, and experiment metadata will be stored by default in `./runs`. To evaluate trained models, run the following command:
 
 ```bash
-python sentence_ranker/eval.py --exp-path ./runs/NAME_OF_RUN --dataset datasets/best_lang.yaml --chkpt-label latest
+python recurve/eval.py --exp-path ./runs/NAME_OF_RUN --dataset datasets/best_lang.yaml --chkpt-label latest
 ```
 
 ### Dataset Format
@@ -66,7 +66,7 @@ ArCHer combines the best of both worlds. Rather than directly using a token-leve
 
 ### Why `recurve`?
 
-All things being equal, a recurve bow will result in more efficient energy transfer into an arrow than a straight bow due to its curved design. In a similar vein, using the ArCHer framework, LLMs can be trained more efficiently than standard token-level methods.
+All things being equal, a recurve bow will result in more efficient energy transfer into an arrow than a straight bow due to its curved design. In a similar vein, using the ArCHer framework, ___s can be trained more efficiently than standard token-level methods.
 
 ### License
 
