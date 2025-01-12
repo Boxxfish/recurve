@@ -35,7 +35,7 @@ class Args(BaseModel):
 
     # Ranker settings
     ranker_base: str = "meta-llama/Llama-3.2-1B"
-    ranker_sample_steps: int = 4 # Number of steps the ranker takes when sampling
+    ranker_sample_steps: int = 4  # Number of steps the ranker takes when sampling
     ranker_candidates: int = (
         8  # Number of candidate sentences to generate on each timestep
     )
@@ -73,7 +73,9 @@ class Args(BaseModel):
     gen_grad_steps: int = 1  # Number of gradient steps to take during PPO
     gen_entropy_coeff: float = 0.03  # Entropy coefficient for PPO
     gen_sft_coeff: float = 0.1  # SFT coefficient for PPO (Prevents logit collapse)
-    gen_train_after: int = 400  # Number of steps to wait until generator training starts
+    gen_train_after: int = (
+        400  # Number of steps to wait until generator training starts
+    )
 
 
 class ExpMeta(BaseModel):
@@ -144,7 +146,7 @@ class RankerTrainer:
                 r=8,
                 lora_alpha=32,
                 lora_dropout=0.1,
-                modules_to_save=["score.weight"]
+                modules_to_save=["score.weight"],
             )
             self.q_net.add_adapter(q_net_lora_cfg, "default")
         self.q_net.cpu()
@@ -172,7 +174,9 @@ def main():
     # Check that the same model family is used for all models
     model_family = args.ranker_base.split("/")[0]
     if not (model_family in args.generator_base and model_family in args.generator_sft):
-        print("Warning: The model families do not appear to be the same (e.g. a LLAMA generator is used with a Qwen ranker). This will cause silent errors. If you are loading a previously trained model in the same family, you can ignore this.")
+        print(
+            "Warning: The model families do not appear to be the same (e.g. a LLAMA generator is used with a Qwen ranker). This will cause silent errors. If you are loading a previously trained model in the same family, you can ignore this."
+        )
 
     # Wandb
     wandb.init(
@@ -199,15 +203,26 @@ def main():
     device = torch.device(args.device)
     gen_trainer.p_net.to(device)
     with torch.no_grad():
-        input_ids, attn_masks, logits, candidate_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        input_ids, attn_masks, logits, candidate_masks = (
+            ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+        )
         print("Filling replay buffer:")
         with tqdm(total=ranker_trainer.buffer.capacity) as pbar:
             while not ranker_trainer.buffer.filled:
                 action = random.randrange(0, args.ranker_candidates)
                 actions = torch.tensor([action])
-                (next_input_ids, next_attn_masks, next_logits, next_candidate_masks), rewards, dones, _, _ = (
-                    ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
-                )
+                (
+                    (
+                        next_input_ids,
+                        next_attn_masks,
+                        next_logits,
+                        next_candidate_masks,
+                    ),
+                    rewards,
+                    dones,
+                    _,
+                    _,
+                ) = ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
                 ranker_trainer.buffer.insert_step(
                     input_ids,
                     attn_masks,
@@ -219,9 +234,16 @@ def main():
                     None,
                     candidate_masks,
                     next_candidate_masks,
-                    torch.zeros([1, args.ranker_candidates], dtype=torch.float), # Unecessary since we aren't training the generator yet
+                    torch.zeros(
+                        [1, args.ranker_candidates], dtype=torch.float
+                    ),  # Unecessary since we aren't training the generator yet
                 )
-                input_ids, attn_masks, logits, candidate_masks = next_input_ids, next_attn_masks, next_logits, next_candidate_masks
+                input_ids, attn_masks, logits, candidate_masks = (
+                    next_input_ids,
+                    next_attn_masks,
+                    next_logits,
+                    next_candidate_masks,
+                )
                 pbar.update(1)
     gen_trainer.p_net.cpu()
 
@@ -232,22 +254,26 @@ def main():
         percent_done = train_step / args.iterations
         with torch.no_grad():
             gen_trainer.p_net.to(device)
-            input_ids, attn_masks, logits, candidate_masks = ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+            input_ids, attn_masks, logits, candidate_masks = (
+                ranker_trainer.envs.reset_ranker(gen_trainer.p_net)
+            )
             gen_trainer.p_net.cpu()
             step_idxs: List[int] = []
             print("Collecting transitions...")
             for _ in range(args.ranker_sample_steps):
                 # Compute Q values
                 ranker_trainer.q_net.to(device)
-                q_vals = get_llm_scores(
-                    ranker_trainer.q_net,
-                    input_ids.to(device),
-                    attn_masks.to(device),
-                    candidate_masks,
-                    args.ranker_use_sigmoid,
-                ).squeeze(
-                    0
-                ).cpu()  # Shape: (num_candidates)
+                q_vals = (
+                    get_llm_scores(
+                        ranker_trainer.q_net,
+                        input_ids.to(device),
+                        attn_masks.to(device),
+                        candidate_masks,
+                        args.ranker_use_sigmoid,
+                    )
+                    .squeeze(0)
+                    .cpu()
+                )  # Shape: (num_candidates)
                 ranker_trainer.q_net.cpu()
 
                 # Select action
@@ -261,9 +287,18 @@ def main():
 
                 # Perform a step in the environment
                 gen_trainer.p_net.to(device)
-                (next_input_ids, next_attn_masks, next_logits, next_candidate_masks), rewards, dones, _, _ = (
-                    ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
-                )
+                (
+                    (
+                        next_input_ids,
+                        next_attn_masks,
+                        next_logits,
+                        next_candidate_masks,
+                    ),
+                    rewards,
+                    dones,
+                    _,
+                    _,
+                ) = ranker_trainer.envs.step_ranker(actions, gen_trainer.p_net)
                 gen_trainer.p_net.cpu()
 
                 # Compute candidate rewards
@@ -287,7 +322,12 @@ def main():
                     next_candidate_masks,
                     candidate_rewards,
                 )
-                input_ids, attn_masks, logits, candidate_masks = next_input_ids, next_attn_masks, next_logits, next_candidate_masks
+                input_ids, attn_masks, logits, candidate_masks = (
+                    next_input_ids,
+                    next_attn_masks,
+                    next_logits,
+                    next_candidate_masks,
+                )
 
             # Run SFT model over transitions and collect logits
             if args.gen_train_mode != "frozen" and train_step >= args.gen_train_after:

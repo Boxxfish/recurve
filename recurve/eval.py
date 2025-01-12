@@ -57,7 +57,9 @@ def main():
     q_net_cfg = AutoConfig.from_pretrained(exp_meta.args.ranker_base)
     q_net_cfg.num_labels = 1
     q_net_cfg.pad_token_id = tokenizer.pad_token_type_id
-    q_net = AutoModelForSequenceClassification.from_pretrained(q_net_dir, config=q_net_cfg)
+    q_net = AutoModelForSequenceClassification.from_pretrained(
+        q_net_dir, config=q_net_cfg
+    )
     q_net.eval()
 
     # Evaluate on dataset

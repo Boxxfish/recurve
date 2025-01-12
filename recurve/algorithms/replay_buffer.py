@@ -158,7 +158,9 @@ class ReplayBuffer:
             rand_rewards = self.rewards.index_select(0, indices)
             rand_dones = self.dones.index_select(0, indices)
             rand_candidate_masks = self.candidate_masks.index_select(0, indices)
-            rand_next_candidate_masks = self.next_candidate_masks.index_select(0, indices)
+            rand_next_candidate_masks = self.next_candidate_masks.index_select(
+                0, indices
+            )
             return (
                 rand_input_ids,
                 rand_attn_masks,

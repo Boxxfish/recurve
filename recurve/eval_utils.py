@@ -50,7 +50,9 @@ def run_eval(
         outputs = []
         for _ in range(runs_per_item):
             p_net.to(device)
-            input_ids, attn_masks, _, candidate_masks = envs.use_item_ranker(item_idx, p_net)
+            input_ids, attn_masks, _, candidate_masks = envs.use_item_ranker(
+                item_idx, p_net
+            )
             p_net.cpu()
             steps = []
             while True:
@@ -79,9 +81,13 @@ def run_eval(
                 )
 
                 p_net.to(device)
-                (input_ids, attn_masks, _, candidate_masks), rewards, dones, truncs, _ = envs.step_ranker(
-                    torch.tensor([action]), p_net, reset=False
-                )
+                (
+                    (input_ids, attn_masks, _, candidate_masks),
+                    rewards,
+                    dones,
+                    truncs,
+                    _,
+                ) = envs.step_ranker(torch.tensor([action]), p_net, reset=False)
                 p_net.cpu()
 
                 text = envs.get_current_texts()[0]

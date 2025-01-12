@@ -150,9 +150,12 @@ def get_llm_scores(
     input_lens = attn_masks.byte().argmin(-1) - 1
 
     q_vals = []
-    for single_input_ids, single_attn_masks, single_input_lens, single_candidate_masks in zip(
-        input_ids, attn_masks, input_lens, candidate_masks
-    ):
+    for (
+        single_input_ids,
+        single_attn_masks,
+        single_input_lens,
+        single_candidate_masks,
+    ) in zip(input_ids, attn_masks, input_lens, candidate_masks):
         prefix_idx = single_candidate_masks[0].byte().argmax().item() - 1
         cache = DynamicCache()
         lm_output = q_net(
@@ -184,6 +187,7 @@ def get_llm_scores(
     if use_sigmoid:
         q_vals = q_vals.sigmoid()
     return q_vals
+
 
 def copy_params(src: nn.Module, dest: nn.Module):
     """

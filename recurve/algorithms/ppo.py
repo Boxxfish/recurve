@@ -6,7 +6,11 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 from tqdm import tqdm
-from transformers import DynamicCache, AutoModelForSequenceClassification, AutoModelForCausalLM
+from transformers import (
+    DynamicCache,
+    AutoModelForSequenceClassification,
+    AutoModelForCausalLM,
+)
 
 from recurve.utils import get_llm_logits
 
@@ -223,8 +227,8 @@ def train_ppo(
             # TODO: Extract producing state values for all tokens into its own function
             prefix_idx = candidate_masks[0].byte().argmax().item() - 1
             v_output = v_net(
-                input_ids[:, : prefix_idx].to(device),
-                attn_masks[:, : prefix_idx].to(device),
+                input_ids[:, :prefix_idx].to(device),
+                attn_masks[:, :prefix_idx].to(device),
                 past_key_values=cache,
             )
             cache = v_output.past_key_values
