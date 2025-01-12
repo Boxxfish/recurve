@@ -1,6 +1,6 @@
 main_prompt: ""
 items:
-  - prompt: Create a list of 4 compiled programming languages, with a short description of each on one line. Then, tell me the best programming language in the form "The best programming language is ____.".
+  - prompt: Create a list of 3 compiled programming languages, with a short description of each on one line. Then, tell me the best programming language in the form "The best programming language is ____.".
     answer: Rust
 score_fn: |
   def score_fn(text: str, answer: str):

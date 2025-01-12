@@ -169,10 +169,10 @@ class RankerTrainer:
 def main():
     args = parse_args(Args)
 
-    # Assert that the same model family is used for all models
+    # Check that the same model family is used for all models
     model_family = args.ranker_base.split("/")[0]
-    assert model_family in args.generator_base
-    assert model_family in args.generator_sft
+    if not (model_family in args.generator_base and model_family in args.generator_sft):
+        print("Warning: The model families do not appear to be the same (e.g. a LLAMA generator is used with a Qwen ranker). This will cause silent errors. If you are loading a previously trained model in the same family, you can ignore this.")
 
     # Wandb
     wandb.init(
@@ -290,20 +290,21 @@ def main():
                 input_ids, attn_masks, logits, candidate_masks = next_input_ids, next_attn_masks, next_logits, next_candidate_masks
 
             # Run SFT model over transitions and collect logits
-            print("Collecting SFT logits...")
-            gen_trainer.sft_net.to(device)
-            for logit_idx, buffer_idx in tqdm(enumerate(step_idxs), position=1):
-                input_ids = ranker_trainer.buffer.input_ids[buffer_idx]
-                attn_masks = ranker_trainer.buffer.attn_masks[buffer_idx]
-                candidate_masks = ranker_trainer.buffer.candidate_masks[buffer_idx]
-                logits = get_llm_logits_candidates(
-                    gen_trainer.sft_net,
-                    input_ids.to(device=device),
-                    attn_masks.to(device=device),
-                    candidate_masks,
-                )
-                ranker_trainer.buffer.sft_logits[logit_idx].copy_(logits)
-            gen_trainer.sft_net.cpu()
+            if args.gen_train_mode != "frozen" and train_step >= args.gen_train_after:
+                print("Collecting SFT logits...")
+                gen_trainer.sft_net.to(device)
+                for logit_idx, buffer_idx in tqdm(enumerate(step_idxs), position=1):
+                    input_ids = ranker_trainer.buffer.input_ids[buffer_idx]
+                    attn_masks = ranker_trainer.buffer.attn_masks[buffer_idx]
+                    candidate_masks = ranker_trainer.buffer.candidate_masks[buffer_idx]
+                    logits = get_llm_logits_candidates(
+                        gen_trainer.sft_net,
+                        input_ids.to(device=device),
+                        attn_masks.to(device=device),
+                        candidate_masks,
+                    )
+                    ranker_trainer.buffer.sft_logits[logit_idx].copy_(logits)
+                gen_trainer.sft_net.cpu()
 
         ####
         ## Ranker
